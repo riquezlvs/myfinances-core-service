@@ -1,9 +1,13 @@
+import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
 import { apagarTransacaoPorId } from '../../services/transactions/transactionService';
 
-const bot = getTelegramBot();
-
-export async function handleApagar(chatId: number, argumento: string, requestId: string): Promise<void> {
+export async function handleApagar(
+  chatId: number,
+  argumento: string,
+  requestId: string,
+  bot: TelegramBot = getTelegramBot()
+): Promise<void> {
   const id = parseInt(argumento.trim(), 10);
 
   if (!Number.isFinite(id)) {

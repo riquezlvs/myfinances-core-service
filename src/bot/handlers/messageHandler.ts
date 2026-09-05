@@ -1,16 +1,15 @@
 import { randomUUID } from 'crypto';
 import type { Message } from 'node-telegram-bot-api';
+import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
 import { log, withTiming } from '../../utils/logger';
 import { AUTHORIZED_USER_ID } from '../../config/env';
 import { classificarIntencao } from '../../services/gemini/intentRouter';
 import { interpretarGasto } from '../../services/gemini/transactionParser';
-import { registrarTransacao } from '../../services/transactions/transactionService';
-import { getCategoryMap } from '../../services/categories/categoryCache';
 import { processarPagamento } from '../../services/debts/debtService';
 import { extrairNomeEValorDeFrase } from '../../utils/textParsers';
-import { formatarReal, formatarPagamento } from '../../utils/formatters';
-import { buildSuccessKeyboard } from '../keyboards/transactionKeyboard';
+import { formatarPagamento } from '../../utils/formatters';
+import { registrarEResponderGasto } from './novoGasto';
 import { handleStart } from '../commands/start';
 import { handleResumo } from '../commands/resumo';
 import { handleDividas } from '../commands/dividas';
@@ -19,39 +18,37 @@ import { handlePagoCommand } from '../commands/pago';
 import { handleFatura } from '../commands/fatura';
 import { handleDesfazer } from '../commands/desfazer';
 import { handleApagar } from '../commands/apagar';
+import {
+  handleRecorrenteListar,
+  handleRecorrenteAdd,
+  handleRecorrenteRemover,
+} from '../commands/recorrente';
+import { handleExportar } from '../commands/exportar';
+import { handleGrafico } from '../commands/grafico';
+import { handleInsight } from '../commands/insight';
+import { handleMeta } from '../commands/meta';
+import { handleCartao } from '../commands/cartao';
 
-const bot = getTelegramBot();
-
-async function handleNovoGasto(chatId: number, texto: string, requestId: string): Promise<void> {
+async function handleNovoGasto(
+  chatId: number,
+  texto: string,
+  requestId: string,
+  bot: TelegramBot
+): Promise<void> {
   const dados = await interpretarGasto(texto, requestId);
   log('info', 'JSON estruturado pelo Gemini', { requestId, dados });
 
-  const { displayIds } = await registrarTransacao(dados, texto, requestId);
-  const categoryMap = await getCategoryMap(requestId);
-  const categoriaNome = categoryMap[dados.category_id] ?? 'Outros';
-  const ehParcelado = displayIds.length > 1;
-
-  let resposta = `✅ Gasto registrado!\n\n📝 ${dados.description}\n💰 R$ ${formatarReal(
-    dados.total_amount
-  )}\n🏷️ ${categoriaNome}\n💳 ${dados.payment_method}`;
-
-  if (ehParcelado) {
-    resposta += `\n🔢 Parcelado em ${displayIds.length}x (IDs #${displayIds.join(', #')})`;
-  } else {
-    resposta += `\n🆔 #${displayIds[0]}`;
-  }
-
-  if (dados.third_party_name) {
-    const minhaParte = dados.my_share_amount ?? dados.total_amount;
-    resposta += `\n🤝 Dividido com: ${dados.third_party_name} (sua parte: R$ ${formatarReal(minhaParte)})`;
-  }
-
-  await bot.sendMessage(chatId, resposta, {
-    reply_markup: buildSuccessKeyboard(displayIds[0], ehParcelado),
-  });
+  // Salvamento + confirmação com botões vivem em novoGasto.ts, compartilhados
+  // com o fluxo de áudio (voiceHandler) para garantir UX idêntica.
+  await registrarEResponderGasto(chatId, dados, texto, requestId, bot);
 }
 
-async function handlePagamentoDivida(chatId: number, texto: string, requestId: string): Promise<void> {
+async function handlePagamentoDivida(
+  chatId: number,
+  texto: string,
+  requestId: string,
+  bot: TelegramBot
+): Promise<void> {
   const extraido = extrairNomeEValorDeFrase(texto);
 
   if (!extraido) {
@@ -67,7 +64,7 @@ async function handlePagamentoDivida(chatId: number, texto: string, requestId: s
   await bot.sendMessage(chatId, formatarPagamento(resultado));
 }
 
-async function handleConsulta(chatId: number): Promise<void> {
+async function handleConsulta(chatId: number, bot: TelegramBot): Promise<void> {
   await bot.sendMessage(
     chatId,
     [
@@ -82,39 +79,44 @@ async function handleConsulta(chatId: number): Promise<void> {
   );
 }
 
-async function handleOutros(chatId: number): Promise<void> {
+async function handleOutros(chatId: number, bot: TelegramBot): Promise<void> {
   await bot.sendMessage(
     chatId,
     'Não entendi muito bem 🤔 Mande um gasto (ex: "Gastei 30 no mercado") ou use /start para ver os comandos.'
   );
 }
 
-async function rotearComando(chatId: number, texto: string, requestId: string): Promise<boolean> {
+async function rotearComando(
+  chatId: number,
+  texto: string,
+  requestId: string,
+  bot: TelegramBot
+): Promise<boolean> {
   if (texto.startsWith('/start')) {
     log('info', 'Comando: /start', { requestId });
-    await handleStart(chatId);
+    await handleStart(chatId, bot);
     return true;
   }
   if (texto.startsWith('/resumo')) {
     log('info', 'Comando: /resumo', { requestId });
-    await handleResumo(chatId, requestId);
+    await handleResumo(chatId, requestId, bot);
     return true;
   }
   if (texto.startsWith('/dividas')) {
     log('info', 'Comando: /dividas', { requestId });
-    await handleDividas(chatId, requestId);
+    await handleDividas(chatId, requestId, bot);
     return true;
   }
   if (texto.startsWith('/fatura')) {
     log('info', 'Comando: /fatura', { requestId });
-    await handleFatura(chatId, requestId);
+    await handleFatura(chatId, requestId, bot);
     return true;
   }
   if (texto.startsWith('/gastos')) {
     const match = texto.match(/\/gastos\s+(\d+)/);
     const limite = match ? parseInt(match[1], 10) : 5;
     log('info', 'Comando: /gastos', { requestId, limite });
-    await handleGastos(chatId, limite, requestId);
+    await handleGastos(chatId, limite, requestId, bot);
     return true;
   }
   if (texto.startsWith('/pago')) {
@@ -124,12 +126,12 @@ async function rotearComando(chatId: number, texto: string, requestId: string): 
       return true;
     }
     log('info', 'Comando: /pago', { requestId });
-    await handlePagoCommand(chatId, match[1], requestId);
+    await handlePagoCommand(chatId, match[1], requestId, bot);
     return true;
   }
   if (texto.startsWith('/desfazer')) {
     log('info', 'Comando: /desfazer', { requestId });
-    await handleDesfazer(chatId, requestId);
+    await handleDesfazer(chatId, requestId, bot);
     return true;
   }
   if (texto.startsWith('/apagar')) {
@@ -139,7 +141,57 @@ async function rotearComando(chatId: number, texto: string, requestId: string): 
       return true;
     }
     log('info', 'Comando: /apagar', { requestId });
-    await handleApagar(chatId, match[1], requestId);
+    await handleApagar(chatId, match[1], requestId, bot);
+    return true;
+  }
+  if (texto.startsWith('/recorrente')) {
+    log('info', 'Comando: /recorrente', { requestId });
+    const argumentos = texto.replace(/^\/recorrente/i, '').trim();
+    if (argumentos === '') {
+      await handleRecorrenteListar(chatId, requestId, bot);
+      return true;
+    }
+    const [sub, ...resto] = argumentos.split(/\s+/);
+    if (sub === 'add') {
+      await handleRecorrenteAdd(chatId, resto.join(' '), requestId, bot);
+      return true;
+    }
+    if (sub === 'remover') {
+      await handleRecorrenteRemover(chatId, resto.join(' '), requestId, bot);
+      return true;
+    }
+    await bot.sendMessage(
+      chatId,
+      'Use assim:\n/recorrente — listar\n/recorrente add <descrição> <valor> <dia> [categoria]\n/recorrente remover <id>'
+    );
+    return true;
+  }
+  if (texto.startsWith('/exportar')) {
+    log('info', 'Comando: /exportar', { requestId });
+    const argumentos = texto.replace(/^\/exportar/i, '').trim();
+    await handleExportar(chatId, argumentos, requestId, bot);
+    return true;
+  }
+  if (texto.startsWith('/grafico')) {
+    log('info', 'Comando: /grafico', { requestId });
+    await handleGrafico(chatId, requestId, bot);
+    return true;
+  }
+  if (texto.startsWith('/insight')) {
+    log('info', 'Comando: /insight', { requestId });
+    await handleInsight(chatId, requestId, bot);
+    return true;
+  }
+  if (texto.startsWith('/meta')) {
+    log('info', 'Comando: /meta', { requestId });
+    const argumentos = texto.replace(/^\/meta/i, '').trim();
+    await handleMeta(chatId, argumentos, requestId, bot);
+    return true;
+  }
+  if (texto.startsWith('/cartao')) {
+    log('info', 'Comando: /cartao', { requestId });
+    const argumentos = texto.replace(/^\/cartao/i, '').trim();
+    await handleCartao(chatId, argumentos, requestId, bot);
     return true;
   }
   if (texto.startsWith('/')) {
@@ -150,7 +202,10 @@ async function rotearComando(chatId: number, texto: string, requestId: string): 
   return false;
 }
 
-export async function messageHandler(msg: Message): Promise<void> {
+export async function messageHandler(
+  msg: Message,
+  bot: TelegramBot = getTelegramBot()
+): Promise<void> {
   const chatId = msg.chat.id;
   const requestId = randomUUID();
 
@@ -176,7 +231,7 @@ export async function messageHandler(msg: Message): Promise<void> {
 
     const texto = msg.text.trim();
 
-    const foiComando = await rotearComando(chatId, texto, requestId);
+    const foiComando = await rotearComando(chatId, texto, requestId, bot);
     if (foiComando) return;
 
     const intencao = await withTiming('rotear intenção da mensagem', { requestId }, () =>
@@ -186,17 +241,17 @@ export async function messageHandler(msg: Message): Promise<void> {
 
     switch (intencao) {
       case 'NOVO_GASTO':
-        await handleNovoGasto(chatId, texto, requestId);
+        await handleNovoGasto(chatId, texto, requestId, bot);
         break;
       case 'PAGAMENTO_DIVIDA':
-        await handlePagamentoDivida(chatId, texto, requestId);
+        await handlePagamentoDivida(chatId, texto, requestId, bot);
         break;
       case 'CONSULTA':
-        await handleConsulta(chatId);
+        await handleConsulta(chatId, bot);
         break;
       case 'OUTROS':
       default:
-        await handleOutros(chatId);
+        await handleOutros(chatId, bot);
         break;
     }
 
@@ -204,6 +259,12 @@ export async function messageHandler(msg: Message): Promise<void> {
   } catch (err) {
     const mensagemErro = err instanceof Error ? err.message : 'Erro desconhecido.';
     log('error', '❌ Fluxo terminou em erro', { requestId, erro: mensagemErro });
-    await bot.sendMessage(chatId, `❌ Não consegui processar sua mensagem.\nMotivo: ${mensagemErro}`);
+    // NÃO expor detalhes internos ao usuário: a causa completa fica no log
+    // (vinculada ao requestId acima) para diagnóstico seguro.
+    await bot.sendMessage(
+      chatId,
+      '❌ Não consegui processar sua mensagem. Tente novamente — se o problema persistir, ' +
+        'verifique o log (requestId para referência).'
+    );
   }
 }

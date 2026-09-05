@@ -241,6 +241,66 @@ export async function getResumoMensal(requestId: string): Promise<ResumoMensal> 
   });
 }
 
+/** Gasto total por dia do mês corrente (índice 0 = dia 1). Usado pelo sparkline do /resumo. */
+export async function getGastosDiariosDoMes(requestId: string): Promise<number[]> {
+  return withTiming('buscar gastos diários do mês', { requestId }, async () => {
+    const hoje = new Date();
+    const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString();
+    const primeiroDiaProxMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 1).toISOString();
+
+    const { data, error } = await getSupabaseClient()
+      .from('transactions')
+      .select('total_amount, occurred_at')
+      .gte('occurred_at', primeiroDia)
+      .lt('occurred_at', primeiroDiaProxMes);
+
+    if (error) throw new Error(`Erro ao buscar gastos diários: ${error.message}`);
+
+    const ultimoDia = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
+    const porDia = new Array<number>(ultimoDia).fill(0);
+
+    for (const t of data ?? []) {
+      const dia = new Date(t.occurred_at as string).getDate();
+      if (dia >= 1 && dia <= ultimoDia) {
+        porDia[dia - 1] += Number(t.total_amount);
+      }
+    }
+    return porDia;
+  });
+}
+
+export interface GastoPorCategoria {
+  categoria: string;
+  total: number;
+}
+
+/** Gasto total agregado por categoria no mês corrente (ordenado, maior primeiro). */
+export async function getGastosPorCategoria(requestId: string): Promise<GastoPorCategoria[]> {
+  return withTiming('buscar gastos por categoria', { requestId }, async () => {
+    const hoje = new Date();
+    const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString();
+    const primeiroDiaProxMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 1).toISOString();
+
+    const { data, error } = await getSupabaseClient()
+      .from('transactions')
+      .select('total_amount, categories(name)')
+      .gte('occurred_at', primeiroDia)
+      .lt('occurred_at', primeiroDiaProxMes);
+
+    if (error) throw new Error(`Erro ao buscar gastos por categoria: ${error.message}`);
+
+    const totais = new Map<string, number>();
+    for (const t of data ?? []) {
+      const nome = (t as any).categories?.name ?? 'Outros';
+      totais.set(nome, (totais.get(nome) ?? 0) + Number((t as any).total_amount));
+    }
+
+    return Array.from(totais.entries())
+      .map(([categoria, total]) => ({ categoria, total }))
+      .sort((a, b) => b.total - a.total);
+  });
+}
+
 export interface ItemFatura {
   display_id: number;
   description: string;

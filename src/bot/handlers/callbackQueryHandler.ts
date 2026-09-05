@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { CallbackQuery } from 'node-telegram-bot-api';
+import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
 import { withTiming, log } from '../../utils/logger';
 import { AUTHORIZED_USER_ID } from '../../config/env';
@@ -16,9 +17,10 @@ import {
   metodoCurtoParaCompleto,
 } from '../keyboards/transactionKeyboard';
 
-const bot = getTelegramBot();
-
-export async function callbackQueryHandler(query: CallbackQuery): Promise<void> {
+export async function callbackQueryHandler(
+  query: CallbackQuery,
+  bot: TelegramBot = getTelegramBot()
+): Promise<void> {
   const requestId = randomUUID();
   const data = query.data;
   const message = query.message;

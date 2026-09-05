@@ -3,7 +3,26 @@ import { iniciarBot } from './bot';
 import { log } from './utils/logger';
 
 async function main(): Promise<void> {
-  await iniciarBot();
+  const { shutdown } = await iniciarBot();
+
+  // Fase 6 — Graceful shutdown: SIGINT (Ctrl+C) e SIGTERM (docker stop,
+  // kill) param os crons e o polling do Telegram sem processos órfãos.
+  const encerrar = (sinal: string): void => {
+    log('info', `📡 Sinal ${sinal} recebido — iniciando shutdown...`);
+    void shutdown().then(() => process.exit(0));
+  };
+
+  process.on('SIGINT', () => encerrar('SIGINT'));
+  process.on('SIGTERM', () => encerrar('SIGTERM'));
+
+  // Defesa em profundidade: promises rejeitadas não tratadas (ex: um
+  // bot.sendMessage dentro de um catch) são logadas em vez de derrubar o
+  // processo silenciosamente (unhandledRejection).
+  process.on('unhandledRejection', (reason) => {
+    log('error', '💥 Promise rejeitada não tratada', {
+      erro: reason instanceof Error ? reason.message : String(reason),
+    });
+  });
 }
 
 // Guard de segurança para os testes (Vitest): este arquivo só dispara o

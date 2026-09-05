@@ -1,8 +1,8 @@
+import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
-import { getResumoMensal } from '../../services/transactions/transactionService';
+import { getResumoMensal, getGastosDiariosDoMes } from '../../services/transactions/transactionService';
 import { formatarReal } from '../../utils/formatters';
-
-const bot = getTelegramBot();
+import { gerarSparklineMensal } from '../../utils/sparklines';
 
 const EMOJI_METODO: Record<string, string> = {
   pix: '💠',
@@ -16,8 +16,19 @@ const NOME_METODO: Record<string, string> = {
   debit_card: 'Cartão de débito',
 };
 
-export async function handleResumo(chatId: number, requestId: string): Promise<void> {
-  const r = await getResumoMensal(requestId);
+export async function handleResumo(
+  chatId: number,
+  requestId: string,
+  bot: TelegramBot = getTelegramBot()
+): Promise<void> {
+  const [r, gastosPorDia] = await Promise.all([
+    getResumoMensal(requestId),
+    getGastosDiariosDoMes(requestId),
+  ]);
+
+  // Fase 5: sparkline unicode da evolução diária de gastos no mês.
+  const ultimoDia = gastosPorDia.length || 1;
+  const sparkline = gerarSparklineMensal(gastosPorDia, ultimoDia);
 
   const linhasPorMetodo = r.porMetodo.length
     ? r.porMetodo.map(
@@ -34,6 +45,8 @@ export async function handleResumo(chatId: number, requestId: string): Promise<v
       `💸 Meus gastos reais: R$ ${formatarReal(r.meuGastoReal)}`,
       `🔁 Recorrentes (minha parte): R$ ${formatarReal(r.gastosRecorrentes)}`,
       `🧾 Lançamentos no mês: ${r.quantidade}`,
+      '',
+      r.quantidade > 0 ? `📈 Evolução diária:\n${sparkline}` : '',
       '',
       '📂 *Por método de pagamento:*',
       ...linhasPorMetodo,

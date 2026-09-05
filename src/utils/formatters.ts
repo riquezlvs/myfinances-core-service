@@ -1,7 +1,13 @@
 import type { ResultadoPagamento } from '../types/transaction';
 
+const formatadorReal = new Intl.NumberFormat('pt-BR', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/** Formata como moeda brasileira: 1234.5 -> "1.234,50". */
 export function formatarReal(valor: number): string {
-  return valor.toFixed(2);
+  return formatadorReal.format(valor);
 }
 
 /** Formata um ISO 8601 como "dd/mm" para exibição compacta em listas. */

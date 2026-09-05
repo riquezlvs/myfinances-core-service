@@ -59,6 +59,39 @@ export function buildTransactionSchema(categoryMap: Record<number, string>) {
   };
 }
 
+/**
+ * Schema multimodal para mensagens de voz/áudio: o Gemini transcreve o
+ * áudio, classifica a intenção e (se for gasto) extrai a transação —
+ * reaproveitando exatamente o mesmo schema de transação do fluxo de texto.
+ */
+export function buildAudioSchema(categoryMap: Record<number, string>) {
+  return {
+    type: Type.OBJECT,
+    properties: {
+      intent: {
+        type: Type.STRING,
+        enum: ['NOVO_GASTO', 'PAGAMENTO_DIVIDA', 'CONSULTA', 'OUTROS'],
+        description:
+          'NOVO_GASTO: o áudio relata uma despesa nova a ser registrada. ' +
+          'PAGAMENTO_DIVIDA: alguém pagou uma dívida com o usuário. ' +
+          'CONSULTA: o usuário pergunta por informação existente. ' +
+          'OUTROS: qualquer coisa fora das anteriores.',
+      },
+      transcricao: {
+        type: Type.STRING,
+        description: 'Transcrição literal do áudio, no idioma falado.',
+      },
+      transaction: {
+        ...buildTransactionSchema(categoryMap),
+        nullable: true,
+        description:
+          'Dados estruturados do gasto descrito no áudio. null se a intenção não for NOVO_GASTO.',
+      },
+    },
+    required: ['intent', 'transcricao', 'transaction'],
+  };
+}
+
 /** Schema fixo (não depende de dados dinâmicos) para o roteamento de intenção. */
 export const intentSchema = {
   type: Type.OBJECT,

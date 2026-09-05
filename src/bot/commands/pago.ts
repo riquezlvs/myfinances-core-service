@@ -1,11 +1,15 @@
+import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
 import { processarPagamento } from '../../services/debts/debtService';
 import { separarNomeValor } from '../../utils/textParsers';
 import { formatarPagamento } from '../../utils/formatters';
 
-const bot = getTelegramBot();
-
-export async function handlePagoCommand(chatId: number, argumentos: string, requestId: string): Promise<void> {
+export async function handlePagoCommand(
+  chatId: number,
+  argumentos: string,
+  requestId: string,
+  bot: TelegramBot = getTelegramBot()
+): Promise<void> {
   const { nome, valor } = separarNomeValor(argumentos);
 
   if (!nome) {

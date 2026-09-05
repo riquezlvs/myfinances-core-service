@@ -14,6 +14,12 @@ export async function setupCommands(): Promise<void> {
     { command: 'pago', description: 'Registrar um pagamento recebido' },
     { command: 'desfazer', description: 'Apagar o último gasto' },
     { command: 'apagar', description: 'Apagar um gasto específico pelo ID' },
+    { command: 'recorrente', description: 'Listar/gerenciar despesas fixas mensais' },
+    { command: 'exportar', description: 'Exportar CSV do mês ou dívidas' },
+    { command: 'grafico', description: 'Gráfico de gastos por categoria' },
+    { command: 'insight', description: 'Análise IA dos seus gastos do mês' },
+    { command: 'meta', description: 'Metas de gasto por categoria' },
+    { command: 'cartao', description: 'Cartões e faturas por fechamento' },
   ]);
 
   log('info', '🧭 Menu de comandos nativo configurado');

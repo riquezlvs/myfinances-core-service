@@ -1,9 +1,12 @@
+import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
 import { desfazerUltimaTransacao } from '../../services/transactions/transactionService';
 
-const bot = getTelegramBot();
-
-export async function handleDesfazer(chatId: number, requestId: string): Promise<void> {
+export async function handleDesfazer(
+  chatId: number,
+  requestId: string,
+  bot: TelegramBot = getTelegramBot()
+): Promise<void> {
   const resultado = await desfazerUltimaTransacao(requestId);
 
   if (!resultado || resultado.displayIds.length === 0) {

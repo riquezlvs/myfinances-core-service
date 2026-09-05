@@ -34,3 +34,6 @@ Thumbs.db
 # Arquivos temporários de teste e dumps
 coverage/
 *.sql.dump
+
+# Metadados do CLI do Supabase (nunca commitar)
+supabase/.temp/

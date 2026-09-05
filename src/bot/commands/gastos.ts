@@ -1,10 +1,14 @@
+import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
 import { getUltimosGastos } from '../../services/transactions/transactionService';
 import { formatarReal, formatarDataCurta } from '../../utils/formatters';
 
-const bot = getTelegramBot();
-
-export async function handleGastos(chatId: number, limite: number, requestId: string): Promise<void> {
+export async function handleGastos(
+  chatId: number,
+  limite: number,
+  requestId: string,
+  bot: TelegramBot = getTelegramBot()
+): Promise<void> {
   const gastos = await getUltimosGastos(limite, requestId);
   if (gastos.length === 0) {
     await bot.sendMessage(chatId, 'Nenhum gasto registrado ainda.');
