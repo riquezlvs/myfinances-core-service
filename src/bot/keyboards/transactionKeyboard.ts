@@ -1,4 +1,5 @@
 import type { InlineKeyboardMarkup } from 'node-telegram-bot-api';
+import type { PaymentMethod } from '../../types/transaction';
 
 /**
  * Teclado da mensagem de sucesso. Categoria/Método só aparecem em
@@ -36,7 +37,7 @@ export function buildCategoryKeyboard(displayId: number, categoryMap: Record<num
 }
 
 interface MetodoOpcao {
-  codigo: 'pix' | 'credit_card' | 'debit_card';
+  codigo: PaymentMethod;
   label: string;
   curto: string; // callback_data tem limite de 64 bytes; usamos códigos curtos
 }
@@ -45,6 +46,8 @@ const METODOS: MetodoOpcao[] = [
   { codigo: 'pix', label: '💠 Pix', curto: 'pix' },
   { codigo: 'credit_card', label: '💳 Crédito', curto: 'cc' },
   { codigo: 'debit_card', label: '🏧 Débito', curto: 'dc' },
+  { codigo: 'meal_voucher', label: '🍽️ Vale-refeição', curto: 'vr' },
+  { codigo: 'food_voucher', label: '🥦 Vale-alimentação', curto: 'va' },
 ];
 
 export function buildMethodKeyboard(displayId: number): InlineKeyboardMarkup {
@@ -56,8 +59,74 @@ export function buildMethodKeyboard(displayId: number): InlineKeyboardMarkup {
   };
 }
 
-export function metodoCurtoParaCompleto(curto: string): 'pix' | 'credit_card' | 'debit_card' {
+export function metodoCurtoParaCompleto(curto: string): PaymentMethod {
   const encontrado = METODOS.find((m) => m.curto === curto);
   if (!encontrado) throw new Error(`Código de método de pagamento desconhecido: ${curto}`);
   return encontrado.codigo;
+}
+
+/**
+ * 8.6 — Ações rápidas de navegação reutilizadas por vários teclados.
+ * O prefixo `nav:` é resolvido pelo callbackQueryHandler, sempre depois do
+ * gate de autorização (AUTHORIZED_USER_ID) — a IA não participa na decisão
+ * do teclado.
+ */
+export const BOTON_GRAFICO = { text: '📊 Ver Gráfico', callback_data: 'nav:grafico' };
+export const BOTON_RESUMO = { text: '📊 Meu Resumo', callback_data: 'nav:resumo' };
+export const BOTON_FATURAS = { text: '💳 Faturas', callback_data: 'nav:fatura' };
+export const BOTON_DIVIDAS = { text: '💰 Dívidas', callback_data: 'nav:dividas' };
+export const BOTON_INSIGHT = { text: '📈 Ver Insight', callback_data: 'nav:insight' };
+export const BOTON_ADICIONAR = { text: '➕ Adicionar Outro', callback_data: 'nav:novogasto' };
+
+/**
+ * 8.6 — Teclado da confirmação do gasto: mantém as ações de edição
+ * (desfazer/categoria/método) e adiciona a navegação rápida. Se a meta da
+ * categoria ESTOUROU (nível limite100), adiciona também a opção contextual
+ * de ver o gráfico ou o insight — botões de decisão.
+ */
+export function buildGastoKeyboard(
+  displayId: number,
+  ehParcelado: boolean,
+  alertaEstouro = false
+): InlineKeyboardMarkup {
+  const filas = buildSuccessKeyboard(displayId, ehParcelado).inline_keyboard;
+  if (alertaEstouro) {
+    filas.push([{ ...BOTON_GRAFICO }, { ...BOTON_INSIGHT }]);
+  }
+  filas.push([{ ...BOTON_RESUMO }, { ...BOTON_ADICIONAR }]);
+  return { inline_keyboard: filas };
+}
+
+/** 8.6 — Teclado de navegação do resumo mensual: gráfico / faturas / dívidas. */
+export function buildResumoKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [[{ ...BOTON_GRAFICO }, { ...BOTON_FATURAS }, { ...BOTON_DIVIDAS }]],
+  };
+}
+
+/** 8.6 — Teclado contextual para avisos de orçamento estourado (gráfico/insight). */
+export function buildAlertaMetaKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [[{ ...BOTON_GRAFICO }, { ...BOTON_INSIGHT }]],
+  };
+}
+
+/** 8.7 — Botão de metas de orçamento, usado na resposta da poupança. */
+export const BOTON_METAS = { text: '💰 Ver Metas', callback_data: 'nav:meta' };
+
+/** 8.7 — Teclado da poupança: atalho para as metas de orçamento do mês. */
+export function buildPoupancaKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [[{ ...BOTON_METAS }]],
+  };
+}
+
+/** 9 — Teclado do modo viagem: atalhos para cotações e registro rápido. */
+export function buildViagemKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: '🔄 Atualizar Cotações', callback_data: 'nav:viagem' }],
+      [{ text: '📊 Ver Gráfico', callback_data: 'nav:grafico' }],
+    ],
+  };
 }

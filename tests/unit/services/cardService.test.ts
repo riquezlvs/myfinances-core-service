@@ -97,13 +97,62 @@ describe('listarCartoes / definirCartao / removerCartao', () => {
   });
 
   it('deve fazer upsert do cartão e retornar o registro', async () => {
-    const b = builder({ single: { id: 'c1', name: 'nubank', closing_day: 20 } });
+    const b = builder({
+      single: { id: 'c1', name: 'nubank', closing_day: 20, card_type: 'credit', is_default: true },
+    });
     mockFrom.mockImplementationOnce(() => b);
 
     const cartao = await definirCartao('nubank', 20, 'req-1');
 
     expect(cartao.name).toBe('nubank');
-    expect(b.upsert).toHaveBeenCalledWith({ name: 'nubank', closing_day: 20 }, { onConflict: 'name' });
+    expect(cartao.is_default).toBe(true);
+    expect(b.upsert).toHaveBeenCalledWith(
+      { name: 'nubank', closing_day: 20, card_type: 'credit' },
+      { onConflict: 'name' }
+    );
+  });
+
+  it('8.2 — deve gravar vale-refeição com o tipo informado', async () => {
+    const b = builder({
+      single: {
+        id: 'c2',
+        name: 'alelo',
+        closing_day: 5,
+        card_type: 'meal_voucher',
+        is_default: true,
+      },
+    });
+    mockFrom.mockImplementationOnce(() => b);
+
+    const cartao = await definirCartao('alelo', 5, 'req-1', 'meal_voucher');
+
+    expect(cartao.card_type).toBe('meal_voucher');
+    expect(b.upsert).toHaveBeenCalledWith(
+      { name: 'alelo', closing_day: 5, card_type: 'meal_voucher' },
+      { onConflict: 'name' }
+    );
+  });
+
+  it('8.2 — primeiro cartão do tipo se torna o principal automaticamente', async () => {
+    const bUpsert = builder({
+      single: {
+        id: 'c3',
+        name: 'sodexo',
+        closing_day: 10,
+        card_type: 'food_voucher',
+        is_default: false,
+      },
+    });
+    const bPrincipal = builder({ maybeSingle: null }); // nenhum principal do tipo ainda
+    const bUpdate = builder(); // update is_default = true
+    mockFrom.mockImplementationOnce(() => bUpsert);
+    mockFrom.mockImplementationOnce(() => bPrincipal);
+    mockFrom.mockImplementationOnce(() => bUpdate);
+
+    const cartao = await definirCartao('sodexo', 10, 'req-1', 'food_voucher');
+
+    expect(cartao.is_default).toBe(true);
+    expect(bUpdate.update).toHaveBeenCalledWith({ is_default: true });
   });
 
   it('deve remover cartão pelo nome', async () => {

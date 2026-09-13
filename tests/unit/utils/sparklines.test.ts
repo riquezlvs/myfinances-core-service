@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { gerarSparkline, gerarSparklineMensal } from '../../../src/utils/sparklines';
+import { gerarSparkline, gerarSparklineMensal, gerarBarraTexto } from '../../../src/utils/sparklines';
 
 describe('gerarSparkline', () => {
   it('deve retornar string vazia para série vazia', () => {
@@ -50,5 +50,31 @@ describe('gerarSparklineMensal', () => {
   it('deve tratar array vazio como série de zeros', () => {
     const spark = gerarSparklineMensal([], 4);
     expect(spark).toBe('▄▄▄▄');
+  });
+});
+
+describe('gerarBarraTexto (8.5)', () => {
+  it('retorna a barra totalmente cheia quando o valor alcança o limite', () => {
+    expect(gerarBarraTexto(100, 100)).toBe('██████████');
+  });
+
+  it('limita o excesso: um gasto de 125% mostra uma barra cheia, nunca desbordada', () => {
+    expect(gerarBarraTexto(150, 100)).toBe('██████████');
+  });
+
+  it('retorna a barra totalmente vazia para valor 0', () => {
+    expect(gerarBarraTexto(0, 100)).toBe('░░░░░░░░░░');
+  });
+
+  it('escala proporcionalmente: metade do limite = metade da barra', () => {
+    expect(gerarBarraTexto(50, 100)).toBe('█████░░░░░');
+  });
+
+  it('evita divisão por zero com maxRef 0 (barra vazia)', () => {
+    expect(gerarBarraTexto(30, 0)).toBe('░░░░░░░░░░');
+  });
+
+  it('respeita o tamanho personalizado de 4 células', () => {
+    expect(gerarBarraTexto(25, 100, 4)).toBe('█░░░');
   });
 });

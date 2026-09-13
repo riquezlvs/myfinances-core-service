@@ -1,4 +1,5 @@
-import type { ResultadoPagamento } from '../types/transaction';
+import type { PaymentMethod, ResultadoPagamento } from '../types/transaction';
+import { RODAPE_UX } from '../config/constants';
 
 const formatadorReal = new Intl.NumberFormat('pt-BR', {
   minimumFractionDigits: 2,
@@ -18,7 +19,28 @@ export function formatarDataCurta(iso: string): string {
   return `${dia}/${mes}`;
 }
 
+const LABEL_METODO: Record<PaymentMethod, string> = {
+  pix: 'Pix',
+  credit_card: 'Cartão de crédito',
+  debit_card: 'Cartão de débito',
+  meal_voucher: 'Vale-refeição',
+  food_voucher: 'Vale-alimentação',
+};
+
+/** 8.2 — Rótulo legível do método de pagamento (ex.: "Vale-refeição"). */
+export function formatarMetodo(metodo: PaymentMethod): string {
+  return LABEL_METODO[metodo] ?? metodo;
+}
+
+/**
+ * Formata a confirmação de um pagamento de dívida, encerrando com o rodapé
+ * humanizado padrão (8.1). Usado pelo /pago e pelo fluxo conversacional.
+ */
 export function formatarPagamento(resultado: ResultadoPagamento): string {
+  return formatarPagamentoTexto(resultado) + `\n\n${RODAPE_UX}`;
+}
+
+function formatarPagamentoTexto(resultado: ResultadoPagamento): string {
   switch (resultado.status) {
     case 'pessoa_nao_encontrada':
       return `❓ Não encontrei ninguém chamado "${resultado.nome}" nos seus registros.`;

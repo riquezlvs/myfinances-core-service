@@ -16,6 +16,16 @@ import {
   buildMethodKeyboard,
   metodoCurtoParaCompleto,
 } from '../keyboards/transactionKeyboard';
+import { formatarMetodo } from '../../utils/formatters';
+import { handleGrafico } from '../commands/grafico';
+import { handleResumo } from '../commands/resumo';
+import { handleFatura } from '../commands/fatura';
+import { handleDividas } from '../commands/dividas';
+import { handleInsight } from '../commands/insight';
+import { handleMeta } from '../commands/meta';
+import { handleStatus } from '../commands/status';
+import { handleViagem } from '../commands/viagem';
+import { RODAPE_UX } from '../../config/constants';
 
 export async function callbackQueryHandler(
   query: CallbackQuery,
@@ -37,6 +47,14 @@ export async function callbackQueryHandler(
 
   if (query.from.id !== AUTHORIZED_USER_ID) {
     await bot.answerCallbackQuery(query.id, { text: '🚫 Acesso negado.' });
+    return;
+  }
+
+  // 8.6 — Botões de navegação rápida (`nav:<destino>`): ações que NÃO dependem
+  // de displayId; reutilizam os comandos existentes (gráfico/resumo/fatura/...).
+  const primeiraParte = data.split(':')[0];
+  if (primeiraParte === 'nav') {
+    await manipularNavegacao(query, bot, chatId, requestId);
     return;
   }
 
@@ -102,7 +120,9 @@ export async function callbackQueryHandler(
           chat_id: chatId,
           message_id: messageId,
         });
-        await bot.answerCallbackQuery(query.id, { text: `💳 Método alterado para: ${metodo}` });
+        await bot.answerCallbackQuery(query.id, {
+          text: `💳 Método alterado para: ${formatarMetodo(metodo)}`,
+        });
         break;
       }
 
@@ -123,4 +143,58 @@ export async function callbackQueryHandler(
     log('error', '❌ Callback terminou em erro', { requestId, data, erro: mensagemErro });
     await bot.answerCallbackQuery(query.id, { text: '❌ Algo deu errado. Tente novamente.' });
   }
+}
+
+/**
+ * 8.6 — Navegação rápida pelos botões inline (`nav:<destino>`): reutiliza as
+ * mesmas rotas dos comandos (gráfico/resumo/fatura/dívidas/insight) sem que o
+ * usuário digite nada. O destino é validado por lista fixa — qualquer valor
+ * fora dela é recusado. Roda apenas após o gate de AUTHORIZED_USER_ID.
+ */
+async function manipularNavegacao(
+  query: CallbackQuery,
+  bot: TelegramBot,
+  chatId: number,
+  requestId: string
+): Promise<void> {
+  const destino = query.data?.split(':')[1] ?? '';
+
+  switch (destino) {
+    case 'grafico':
+      await handleGrafico(chatId, requestId, bot);
+      break;
+    case 'resumo':
+      await handleResumo(chatId, requestId, bot);
+      break;
+    case 'fatura':
+      await handleFatura(chatId, requestId, bot);
+      break;
+    case 'dividas':
+      await handleDividas(chatId, requestId, bot);
+      break;
+    case 'insight':
+      await handleInsight(chatId, requestId, bot);
+      break;
+    case 'meta':
+      await handleMeta(chatId, '', requestId, bot);
+      break;
+    case 'status':
+      await handleStatus(chatId, requestId, bot);
+      break;
+    case 'viagem':
+      await handleViagem(chatId, '', requestId, bot);
+      break;
+    case 'novogasto':
+      await bot.sendMessage(
+        chatId,
+        `➕ Claro! Manda o novo gasto, por exemplo:\n"Gastei 30 no mercado".\n\n${RODAPE_UX}`
+      );
+      break;
+    default:
+      await bot.answerCallbackQuery(query.id, { text: '❓ Ação não reconhecida.' });
+      return;
+  }
+
+  log('info', 'Callback: navegação rápida executada', { requestId, destino });
+  await bot.answerCallbackQuery(query.id, { text: '✅ Pronto!' });
 }

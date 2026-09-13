@@ -1,100 +1,136 @@
-import { createCanvas, type SKRSContext2D } from '@napi-rs/canvas';
+import { createCanvas } from '@napi-rs/canvas';
 import { withTiming } from '../../utils/logger';
 import { formatarReal } from '../../utils/formatters';
 import type { GastoPorCategoria } from '../transactions/transactionService';
+import type { NivelMeta } from '../budgets/budgetService';
 
 /**
- * Fase 5 — Gráfico de barras por categoria, gerado como PNG em memória
- * com @napi-rs/canvas (canvas nativo, sem navegador headless — leve o
- * suficiente para o Free Tier).
+ * Fase 8.5 — Gráfico de barras HORIZONTALES por categoria, gerado como PNG
+ * em memória com @napi-rs/canvas (canvas nativo, sem navegador headless —
+ * leve para o Free Tier). Barras horizontais = nomes longos de categorias
+ * legíveis, eixo X com escala explícita de valores (R$) e paleta semafórica
+ * ligada ao status do orçamento (🟢 < 80%, 🟡 >= 80%, 🔴 100% estourado).
+ * A cor NUNCA vem da IA: decisão puramente do código.
  */
 
-const LARGURA = 800;
-const ALTURA_POR_BARRA = 90;
-const ALTURA_MINIMA = 260;
-const MARGEM = { topo: 70, esquerda: 40, direita: 40, base: 40 };
-const COR_BARRA = '#4f8ef7';
+/** 8.5 — Gasto por categoria enriquecido com o status da meta (budgetService). */
+export interface GastoPorCategoriaConStatus extends GastoPorCategoria {
+  /** Status da meta (ok | aviso80 | limite100). Ausente ou null = sem meta (verde). */
+  nivel?: NivelMeta;
+}
+
+const LARGURA = 860;
+const ALTURA_FILA = 50;
+const ALTURA_MINIMA = 300;
+const MARGEM = { topo: 64, base: 44, entrefilas: 8 };
+
+const COR_FONDO = '#ffffff';
 const COR_TEXTO = '#1f2937';
-const COR_VALOR = '#111827';
 const COR_GRADE = '#e5e7eb';
+const COR_GRADE_ROTULO = '#6b7280';
 
-/** Desenha uma barra com rótulo da categoria e valor. */
-function desenharBarra(
-  ctx: SKRSContext2D,
-  barra: { x: number; y: number; largura: number; altura: number },
-  categoria: string,
-  valor: number,
-  maxValor: number
-): void {
-  // Barra (altura proporcional ao valor, com mínimo visível de 4px).
-  const altura = Math.max(4, (valor / maxValor) * barra.altura);
-  ctx.fillStyle = COR_BARRA;
-  ctx.fillRect(barra.x, barra.y + barra.altura - altura, barra.largura, altura);
+/** Largura máxima do nome da categoria antes de truncar no eixo Y. */
+const NOME_MAX = 24;
 
-  // Nome da categoria (truncado para caber).
-  ctx.fillStyle = COR_TEXTO;
-  ctx.font = '16px sans-serif';
-  ctx.textAlign = 'center';
-  const rotulo = categoria.length > 14 ? `${categoria.slice(0, 13)}…` : categoria;
-  ctx.fillText(rotulo, barra.x + barra.largura / 2, barra.y + barra.altura + 22);
+/**
+ * 8.5 — Paleta semafórica (integração com budgetService): cor por status.
+ * Exportada para testes unitários puros.
+ */
+export const COR_POR_NIVEL: Record<NivelMeta, string> = {
+  ok: '#2e9e5b',
+  aviso80: '#f0a820',
+  limite100: '#d64545',
+};
 
-  // Valor em R$ acima da barra.
-  ctx.fillStyle = COR_VALOR;
-  ctx.font = 'bold 15px sans-serif';
-  ctx.fillText(`R$ ${formatarReal(valor)}`, barra.x + barra.largura / 2, barra.y + barra.altura - altura - 8);
+/** Cor de uma barra a partir do status; sem meta -> verde (ok). */
+export function corParaNivel(nivel: NivelMeta | undefined): string {
+  return COR_POR_NIVEL[nivel ?? 'ok'];
+}
+
+function truncarNome(nome: string): string {
+  return nome.length > NOME_MAX ? `${nome.slice(0, NOME_MAX - 1)}…` : nome;
 }
 
 /**
- * Gera o PNG do gráfico de barras de gastos por categoria do mês.
+ * 8.5 — Gera o PNG do gráfico de barras horizontais de gastos por categoria.
  * Retorna o buffer pronto para bot.sendPhoto().
  */
-export async function gerarGraficoCategoriasPNG(dados: GastoPorCategoria[], mesAno: string): Promise<Buffer> {
+export async function gerarGraficoCategoriasPNG(
+  dados: GastoPorCategoriaConStatus[],
+  mesAno: string
+): Promise<Buffer> {
   return withTiming('gerar gráfico de categorias (PNG)', { qtd_categorias: dados.length }, async () => {
     if (dados.length === 0) throw new Error('Sem dados para gerar o gráfico.');
 
-    const altura = Math.max(ALTURA_MINIMA, MARGEM.topo + dados.length * ALTURA_POR_BARRA + MARGEM.base);
-    const canvas = createCanvas(LARGURA, altura);
+    // Margem esquerdo dinâmico: o nome mais longo define a largura do eixo Y.
+    const nomeMaxLargo = Math.max(...dados.map((d) => truncarNome(d.categoria).length));
+    const margemEsq = Math.min(300, Math.max(140, nomeMaxLargo * 7.6 + 22));
+    const larguraUtil = LARGURA - margemEsq - 50;
+
+    const alturaTotal = Math.max(ALTURA_MINIMA, MARGEM.topo + dados.length * ALTURA_FILA + MARGEM.base);
+    const canvas = createCanvas(LARGURA, alturaTotal);
     const ctx = canvas.getContext('2d');
 
     // Fundo branco.
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, LARGURA, altura);
+    ctx.fillStyle = COR_FONDO;
+    ctx.fillRect(0, 0, LARGURA, alturaTotal);
 
     // Título.
     ctx.fillStyle = COR_TEXTO;
     ctx.font = 'bold 26px sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText(`Gastos por categoria — ${mesAno}`, MARGEM.esquerda, 44);
+    ctx.fillText(`Gastos por categoria — ${mesAno}`, margemEsq, 44);
 
     const maxValor = Math.max(...dados.map((d) => d.total));
-    const areaUtil = altura - MARGEM.topo - MARGEM.base;
-    const alturaBarra = Math.min(48, (areaUtil / dados.length) * 0.55);
-    const passo = areaUtil / dados.length;
 
-    // Linhas de grade horizontais leves.
+    // Eixo X: escala explícita de valores (0%, 25%, 50%, 75%, 100%) com
+    // linhas de grade verticais e rótulo em R$ (legibilidade dos valores).
     ctx.strokeStyle = COR_GRADE;
     ctx.lineWidth = 1;
-    for (let i = 0; i <= dados.length; i++) {
-      const y = MARGEM.topo + i * passo;
+    ctx.fillStyle = COR_GRADE_ROTULO;
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    const passosEixoX = 4;
+    for (let i = 0; i <= passosEixoX; i++) {
+      const fracao = i / passosEixoX;
+      const x = margemEsq + larguraUtil * fracao;
       ctx.beginPath();
-      ctx.moveTo(MARGEM.esquerda, y);
-      ctx.lineTo(LARGURA - MARGEM.direita, y);
+      ctx.moveTo(x, MARGEM.topo);
+      ctx.lineTo(x, alturaTotal - MARGEM.base);
       ctx.stroke();
+      ctx.fillText(`R$ ${formatarReal(maxValor * fracao)}`, x, alturaTotal - MARGEM.base + 20);
     }
 
+    // Filas: nome (eixo Y) + barra horizontal proporcional + valor em R$.
     dados.forEach((d, i) => {
-      desenharBarra(
-        ctx,
-        {
-          x: MARGEM.esquerda + 10,
-          y: MARGEM.topo + i * passo,
-          largura: LARGURA - MARGEM.esquerda - MARGEM.direita - 20,
-          altura: alturaBarra,
-        },
-        d.categoria,
-        d.total,
-        maxValor
-      );
+      const topoFila = MARGEM.topo + i * ALTURA_FILA + MARGEM.entrefilas;
+      const alturaBarra = ALTURA_FILA - MARGEM.entrefilas * 2;
+      const largura = Math.max(4, (d.total / maxValor) * larguraUtil);
+      const cor = corParaNivel(d.nivel);
+
+      // Nome da categoria alinhado à esquerda (sem cortes: o margem se adapta).
+      ctx.fillStyle = COR_TEXTO;
+      ctx.font = '15px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(truncarNome(d.categoria), 8, topoFila + alturaBarra / 2 + 5);
+
+      // Barra horizontal com cor semafórica.
+      ctx.fillStyle = cor;
+      ctx.fillRect(margemEsq, topoFila, largura, alturaBarra);
+
+      // Valor em R$: dentro da barra (branco) quando cabe; senão à direita.
+      const etiquetaValor = `R$ ${formatarReal(d.total)}`;
+      ctx.font = 'bold 14px sans-serif';
+      const larguraRotulo = etiquetaValor.length * 7.4;
+      if (largura >= larguraRotulo + 20) {
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'right';
+        ctx.fillText(etiquetaValor, margemEsq + largura - 10, topoFila + alturaBarra / 2 + 5);
+      } else {
+        ctx.fillStyle = COR_TEXTO;
+        ctx.textAlign = 'left';
+        ctx.fillText(etiquetaValor, margemEsq + largura + 8, topoFila + alturaBarra / 2 + 5);
+      }
     });
 
     // Otimização: encode assíncrono libera o event loop durante a

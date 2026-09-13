@@ -20,6 +20,9 @@ export async function setupCommands(): Promise<void> {
     { command: 'insight', description: 'Análise IA dos seus gastos do mês' },
     { command: 'meta', description: 'Metas de gasto por categoria' },
     { command: 'cartao', description: 'Cartões e faturas por fechamento' },
+    { command: 'poupanca', description: 'Metas de poupança de longo prazo' },
+    { command: 'viagem', description: 'Modo viagem (gastos em USD/EUR)' },
+    { command: 'status', description: 'Status do serviço (uptime, latência, versão)' },
   ]);
 
   log('info', '🧭 Menu de comandos nativo configurado');

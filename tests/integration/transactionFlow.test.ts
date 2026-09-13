@@ -2,20 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Message } from 'node-telegram-bot-api';
 import type TelegramBot from 'node-telegram-bot-api';
 import { messageHandler } from '../../src/bot/handlers/messageHandler';
-import type { Intent, ParsedTransaction } from '../../src/types/transaction';
+import type { IntentPayload, ParsedTransaction } from '../../src/types/transaction';
 
 // Mocks dos serviços externos usados pelo messageHandler.
 vi.mock('../../src/services/gemini/intentRouter', () => ({
   classificarIntencao: vi.fn(),
-}));
-vi.mock('../../src/services/gemini/transactionParser', () => ({
-  interpretarGasto: vi.fn(),
 }));
 vi.mock('../../src/services/transactions/transactionService', () => ({
   registrarTransacao: vi.fn(),
   apagarTransacaoComGrupo: vi.fn(),
   atualizarCategoria: vi.fn(),
   atualizarMetodo: vi.fn(),
+  getUltimosGastos: vi.fn(),
+  consultarGastosGranulares: vi.fn(),
 }));
 vi.mock('../../src/services/categories/categoryCache', () => ({
   getCategoryMap: vi.fn(),
@@ -23,20 +22,28 @@ vi.mock('../../src/services/categories/categoryCache', () => ({
 vi.mock('../../src/services/budgets/budgetService', () => ({
   verificarMeta: vi.fn().mockResolvedValue(null),
 }));
+vi.mock('../../src/services/export/exportService', () => ({
+  exportarGastosDoMesCSV: vi.fn(),
+  exportarDividasCSV: vi.fn(),
+}));
 
 import { classificarIntencao } from '../../src/services/gemini/intentRouter';
-import { interpretarGasto } from '../../src/services/gemini/transactionParser';
-import { registrarTransacao } from '../../src/services/transactions/transactionService';
+import { registrarTransacao, consultarGastosGranulares } from '../../src/services/transactions/transactionService';
+import { exportarGastosDoMesCSV } from '../../src/services/export/exportService';
 import { getCategoryMap } from '../../src/services/categories/categoryCache';
+import { RODAPE_UX } from '../../src/config/constants';
 
 const mockClassificarIntencao = vi.mocked(classificarIntencao);
-const mockInterpretarGasto = vi.mocked(interpretarGasto);
 const mockRegistrarTransacao = vi.mocked(registrarTransacao);
+const mockConsultarGastosGranulares = vi.mocked(consultarGastosGranulares);
+const mockExportarGastosDoMesCSV = vi.mocked(exportarGastosDoMesCSV);
 const mockGetCategoryMap = vi.mocked(getCategoryMap);
 
 function criarBotMock() {
   const bot = {
     sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+    sendChatAction: vi.fn().mockResolvedValue(true),
+    sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
     answerCallbackQuery: vi.fn().mockResolvedValue(true),
     deleteMessage: vi.fn().mockResolvedValue(true),
     editMessageReplyMarkup: vi.fn().mockResolvedValue(true),
@@ -55,20 +62,33 @@ function criarMensagem(texto: string, userId = 12345): Message {
   } as unknown as Message;
 }
 
+/** Mês corrente no formato YYYY-MM — sempre dentro da janela MAX_MONTH_LOOKBACK. */
+function mesAtual(): string {
+  const agora = new Date();
+  return `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}`;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('messageHandler — fluxo de novo gasto', () => {
+describe('messageHandler — fluxo de novo gasto (payload único do Gemini)', () => {
   it('deve registrar um gasto avulso e responder com sucesso', async () => {
-    mockClassificarIntencao.mockResolvedValue('NOVO_GASTO' as Intent);
-    mockInterpretarGasto.mockResolvedValue({
-      description: 'Almoço no restaurante',
-      total_amount: 45,
-      category_id: 1,
-      payment_method: 'pix',
-      occurred_at: '2026-09-05T12:00:00.000Z',
-    } as ParsedTransaction);
+    mockClassificarIntencao.mockResolvedValue({
+      intent: 'NOVO_GASTO',
+      params: {},
+      transaction: {
+        description: 'Almoço no restaurante',
+        total_amount: 45,
+        category_id: 1,
+        payment_method: 'pix',
+        occurred_at: '2026-09-05T12:00:00.000Z',
+        my_share_amount: null,
+        third_party_name: null,
+        installment_total: null,
+      } as ParsedTransaction,
+      avisos: [],
+    } as IntentPayload);
     mockRegistrarTransacao.mockResolvedValue({ displayIds: [101] });
     mockGetCategoryMap.mockResolvedValue({ 1: 'Alimentação' });
 
@@ -76,7 +96,6 @@ describe('messageHandler — fluxo de novo gasto', () => {
     await messageHandler(criarMensagem('Gastei 45 no almoço no pix'), bot);
 
     expect(mockClassificarIntencao).toHaveBeenCalled();
-    expect(mockInterpretarGasto).toHaveBeenCalledWith('Gastei 45 no almoço no pix', expect.any(String));
     expect(mockRegistrarTransacao).toHaveBeenCalled();
     expect(bot.sendMessage).toHaveBeenCalledTimes(1);
 
@@ -89,15 +108,21 @@ describe('messageHandler — fluxo de novo gasto', () => {
   });
 
   it('deve registrar compra parcelada e listar todos os IDs', async () => {
-    mockClassificarIntencao.mockResolvedValue('NOVO_GASTO' as Intent);
-    mockInterpretarGasto.mockResolvedValue({
-      description: 'Tênis novo',
-      total_amount: 300,
-      category_id: 7,
-      payment_method: 'credit_card',
-      occurred_at: '2026-09-05T12:00:00.000Z',
-      installment_total: 3,
-    } as ParsedTransaction);
+    mockClassificarIntencao.mockResolvedValue({
+      intent: 'NOVO_GASTO',
+      params: {},
+      transaction: {
+        description: 'Tênis novo',
+        total_amount: 300,
+        category_id: 7,
+        payment_method: 'credit_card',
+        occurred_at: '2026-09-05T12:00:00.000Z',
+        my_share_amount: null,
+        third_party_name: null,
+        installment_total: 3,
+      } as ParsedTransaction,
+      avisos: [],
+    } as IntentPayload);
     mockRegistrarTransacao.mockResolvedValue({ displayIds: [201, 202, 203] });
     mockGetCategoryMap.mockResolvedValue({ 7: 'Compras' });
 
@@ -127,6 +152,148 @@ describe('messageHandler — fluxo de novo gasto', () => {
     const texto = bot.sendMessage.mock.calls[0][1];
     expect(texto).toContain('Não consegui processar sua mensagem');
     expect(texto).not.toContain('Gemini fora do ar'); // não vaza detalhe interno
+  });
+});
+
+describe('messageHandler — Intent Routing conversacional', () => {
+  it('EXPORTAR: "manda a planilha" roteia para o exportService com o mês', async () => {
+    mockClassificarIntencao.mockResolvedValue({
+      intent: 'EXPORTAR',
+      params: { tipoExport: 'gastos', month: mesAtual() },
+      avisos: [],
+    } as IntentPayload);
+    mockExportarGastosDoMesCSV.mockResolvedValue({
+      nome: 'gastos.csv',
+      buffer: Buffer.from('a,b\n1,2'),
+      linhas: 2,
+    });
+
+    const bot = criarBotMock();
+    await messageHandler(criarMensagem('manda a planilha com meus gastos'), bot);
+
+    expect(mockExportarGastosDoMesCSV).toHaveBeenCalledWith(expect.any(String), mesAtual());
+    expect(bot.sendDocument).toHaveBeenCalledTimes(1);
+    expect(mockRegistrarTransacao).not.toHaveBeenCalled();
+  });
+
+  it('EXPORTAR: mês fora da janela (hard-limit em código) é recusado sem exportar', async () => {
+    mockClassificarIntencao.mockResolvedValue({
+      intent: 'EXPORTAR',
+      params: { tipoExport: 'gastos', month: '2100-01' },
+      avisos: [],
+    } as IntentPayload);
+
+    const bot = criarBotMock();
+    await messageHandler(criarMensagem('exporta janeiro de 2100'), bot);
+
+    expect(mockExportarGastosDoMesCSV).not.toHaveBeenCalled();
+    expect(bot.sendDocument).not.toHaveBeenCalled();
+    const texto = bot.sendMessage.mock.calls[0][1];
+    expect(texto).toContain('últimos 12');
+  });
+
+  it('CONFIRMACAO_REQUERIDA: pedido destrutivo NUNCA executa — aponta os comandos seguros', async () => {
+    mockClassificarIntencao.mockResolvedValue({
+      intent: 'CONFIRMACAO_REQUERIDA',
+      params: { pedidoDescricao: 'apagar o gasto de ontem' },
+      avisos: [],
+    } as IntentPayload);
+
+    const bot = criarBotMock();
+    await messageHandler(criarMensagem('apaga o gasto de ontem'), bot);
+
+    const texto = bot.sendMessage.mock.calls[0][1];
+    expect(texto).toContain('nunca apago nada por conversa');
+    expect(texto).toContain('/apagar');
+    expect(mockRegistrarTransacao).not.toHaveBeenCalled();
+  });
+
+  it('CONSULTA sem entidade orienta o usuário (sem dead-end de comandos)', async () => {
+    mockClassificarIntencao.mockResolvedValue({
+      intent: 'CONSULTA',
+      params: {},
+      avisos: [],
+    } as IntentPayload);
+
+    const bot = criarBotMock();
+    await messageHandler(criarMensagem('o que você tem pra mim?'), bot);
+
+    const texto = bot.sendMessage.mock.calls[0][1];
+    expect(texto).toContain('Posso te mostrar');
+    expect(texto).toContain('resumo do mês');
+  });
+});
+
+describe('messageHandler — CONSULTA granular por linguagem natural (8.4)', () => {
+  it('filtra por categoria + mês e responde total, detalhe e RODAPE_UX', async () => {
+    const mes = mesAtual();
+    mockClassificarIntencao.mockResolvedValue({
+      intent: 'CONSULTA',
+      params: { category: 'transporte', month: mes, type: 'gasto' },
+      avisos: [],
+    } as IntentPayload);
+    mockGetCategoryMap.mockResolvedValue({ 1: 'Transporte', 2: 'Alimentação' });
+    mockConsultarGastosGranulares.mockResolvedValue({
+      total: 452,
+      items: [
+        {
+          display_id: 12,
+          description: 'Uber al aeropuerto',
+          total_amount: 98,
+          occurred_at: `${mes}-12T10:00:00.000Z`,
+          categoria: 'Transporte',
+          payment_method: 'credit_card',
+        },
+      ],
+    });
+
+    const bot = criarBotMock();
+    await messageHandler(criarMensagem('quanto gastei com transporte este mes?'), bot);
+
+    // A categoria é resolvida em CÓDIGO (catálogo); jamais chega um category_id da IA.
+    expect(mockConsultarGastosGranulares).toHaveBeenCalledWith(
+      { categoryId: 1, month: mes, limite: undefined },
+      expect.any(String)
+    );
+    const texto = bot.sendMessage.mock.calls[0][1];
+    expect(texto).toContain('Transporte');
+    expect(texto).toContain('452,00');
+    expect(texto).toContain(RODAPE_UX);
+  });
+
+  it('categoria desconhecida: avisa e lista as válidas do catálogo, sem consultar', async () => {
+    mockClassificarIntencao.mockResolvedValue({
+      intent: 'CONSULTA',
+      params: { category: 'placer', month: mesAtual() },
+      avisos: [],
+    } as IntentPayload);
+    mockGetCategoryMap.mockResolvedValue({ 1: 'Transporte', 2: 'Alimentação' });
+
+    const bot = criarBotMock();
+    await messageHandler(criarMensagem('quanto gastei com placer este mes?'), bot);
+
+    expect(mockConsultarGastosGranulares).not.toHaveBeenCalled();
+    const texto = bot.sendMessage.mock.calls[0][1];
+    expect(texto).toContain('Não reconheço a categoria');
+    expect(texto).toContain('Transporte');
+    expect(texto).toContain(RODAPE_UX);
+  });
+
+  it('mês fora da janela: recusa por hard-limit em código, sem invocar a consulta', async () => {
+    mockClassificarIntencao.mockResolvedValue({
+      intent: 'CONSULTA',
+      params: { category: 'transporte', month: '2100-01' },
+      avisos: [],
+    } as IntentPayload);
+
+    const bot = criarBotMock();
+    await messageHandler(criarMensagem('quanto gastei com transporte em janeiro de 2100?'), bot);
+
+    expect(mockConsultarGastosGranulares).not.toHaveBeenCalled();
+    expect(mockGetCategoryMap).not.toHaveBeenCalled();
+    const texto = bot.sendMessage.mock.calls[0][1];
+    expect(texto).toContain('últimos 12');
+    expect(texto).toContain(RODAPE_UX);
   });
 });
 

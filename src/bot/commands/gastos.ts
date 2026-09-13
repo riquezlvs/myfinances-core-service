@@ -2,6 +2,7 @@ import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
 import { getUltimosGastos } from '../../services/transactions/transactionService';
 import { formatarReal, formatarDataCurta } from '../../utils/formatters';
+import { RODAPE_UX } from '../../config/constants';
 
 export async function handleGastos(
   chatId: number,
@@ -30,6 +31,8 @@ export async function handleGastos(
       ...linhas,
       '',
       'Use /apagar <id> para remover um específico.',
+      '',
+      RODAPE_UX,
     ].join('\n')
   );
 }

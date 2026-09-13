@@ -12,6 +12,15 @@ export function log(level: 'info' | 'warn' | 'error', message: string, context: 
   else console.log(linha);
 }
 
+/**
+ * 8.1 — Log estruturado da ROTA exata escolhida pelo registry determinístico
+ * (messageHandler) ou por qualquer dispatcher. Garante auditabilidade:
+ * para cada requestId é possível reconstruir qual handler rodou e por quê.
+ */
+export function logRota(requestId: string, rota: string, detalhes: LogContext = {}): void {
+  log('info', `🧭 ROTA → ${rota}`, { requestId, rota, ...detalhes });
+}
+
 export async function withTiming<T>(
   label: string,
   context: LogContext,

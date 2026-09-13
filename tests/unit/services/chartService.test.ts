@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { gerarGraficoCategoriasPNG } from '../../../src/services/charts/chartService';
+import {
+  gerarGraficoCategoriasPNG,
+  corParaNivel,
+  COR_POR_NIVEL,
+} from '../../../src/services/charts/chartService';
 
 describe('gerarGraficoCategoriasPNG', () => {
   it('deve gerar um buffer PNG válido com uma categoria', async () => {
@@ -37,5 +41,27 @@ describe('gerarGraficoCategoriasPNG', () => {
     );
 
     expect(png.length).toBeGreaterThan(0);
+  });
+
+  it('deve gerar PNG com a paleta semafórica pelo status da meta (8.5)', async () => {
+    const png = await gerarGraficoCategoriasPNG(
+      [
+        { categoria: 'Alimentação', total: 900, nivel: 'limite100' },
+        { categoria: 'Transporte', total: 300, nivel: 'aviso80' },
+        { categoria: 'Lazer', total: 120, nivel: 'ok' },
+        { categoria: 'Outros', total: 50 },
+      ],
+      'setembro de 2026'
+    );
+
+    // PNG válido mágico.
+    expect(png.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  });
+
+  it('corParaNivel: sem meta -> verde; aviso80 -> amarelo; limite100 -> vermelho', () => {
+    expect(corParaNivel(undefined)).toBe(COR_POR_NIVEL.ok);
+    expect(corParaNivel('ok')).toBe(COR_POR_NIVEL.ok);
+    expect(corParaNivel('aviso80')).toBe(COR_POR_NIVEL.aviso80);
+    expect(corParaNivel('limite100')).toBe(COR_POR_NIVEL.limite100);
   });
 });

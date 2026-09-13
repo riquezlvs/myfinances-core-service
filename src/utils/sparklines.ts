@@ -41,3 +41,19 @@ export function gerarSparklineMensal(gastosPorDia: number[], ultimoDia: number):
   const serie = Array.from({ length: ultimoDia }, (_, i) => gastosPorDia[i] ?? 0);
   return gerarSparkline(serie);
 }
+
+/**
+ * 8.5 — Barra proporcional em texto puro para mensagens (10 células por
+ * padrão). O cálculo usa Math.floor para que a barra nunca mostre mais
+ * proporção que a real, e se limita a [0, tamanho]: um gasto a 125% do
+ * limite mostra uma barra cheia, não desbordada — o percentual textual
+ * apresenta o excesso. Um maxRef menor ou igual a zero retorna a barra
+ * totalmente vazia, evitando a divisão por zero.
+ */
+export function gerarBarraTexto(valor: number, maxRef: number, tamanho = 10): string {
+  const maxAbs = Math.max(maxRef, 0);
+  const n = Math.max(Math.floor(tamanho), 0);
+  if (maxAbs <= 0 || n === 0) return '░'.repeat(n);
+  const preenchido = Math.min(Math.floor((valor / maxAbs) * n), n);
+  return '█'.repeat(preenchido) + '░'.repeat(n - preenchido);
+}

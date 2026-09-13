@@ -92,7 +92,8 @@ export async function voiceHandler(
         extracao.transaction,
         `[áudio] ${extracao.transcricao}`,
         requestId,
-        bot
+        bot,
+        extracao.avisos
       );
       return;
     }

@@ -9,6 +9,7 @@ import {
   type ItemFaturaCartao,
 } from '../../services/cards/cardService';
 import { formatarReal, formatarDataCurta } from '../../utils/formatters';
+import { RODAPE_UX } from '../../config/constants';
 
 interface ItemFatura {
   display_id: number;
@@ -75,7 +76,9 @@ export async function handleFatura(
 
   await bot.sendMessage(
     chatId,
-    [titulo, '', ...formatarItens(itens), '', `*Total: R$ ${formatarReal(total)}*`].join('\n'),
+    [titulo, '', ...formatarItens(itens), '', `*Total: R$ ${formatarReal(total)}*`, '', RODAPE_UX].join(
+      '\n'
+    ),
     { parse_mode: 'Markdown' }
   );
 }

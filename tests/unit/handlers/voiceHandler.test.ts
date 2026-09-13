@@ -89,6 +89,7 @@ describe('voiceHandler', () => {
         payment_method: 'pix',
         occurred_at: '2026-09-05T12:00:00.000Z',
       },
+      avisos: [],
     });
 
     const bot = criarBotMock();
@@ -110,7 +111,8 @@ describe('voiceHandler', () => {
       expect.objectContaining({ description: 'Almoço', total_amount: 45 }),
       '[áudio] Gastei 45 no almoço no pix',
       expect.any(String),
-      bot
+      bot,
+      []
     );
     // Nenhuma mensagem avulsa: a confirmação vem de registrarEResponderGasto.
     expect(bot.sendMessage).not.toHaveBeenCalled();

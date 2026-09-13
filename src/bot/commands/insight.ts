@@ -2,6 +2,7 @@ import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
 import { log } from '../../utils/logger';
 import { gerarInsight } from '../../services/gemini/insightService';
+import { RODAPE_UX } from '../../config/constants';
 
 /**
  * Fase 5 — /insight: agrega os dados do mês e pede ao Gemini uma análise
@@ -15,7 +16,9 @@ export async function handleInsight(
   try {
     await bot.sendChatAction(chatId, 'typing');
     const texto = await gerarInsight(requestId);
-    await bot.sendMessage(chatId, `🤖 *Insight do mês:*\n\n${texto}`, { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, `🤖 *Insight do mês:*\n\n${texto}\n\n${RODAPE_UX}`, {
+      parse_mode: 'Markdown',
+    });
   } catch (err) {
     log('error', 'Erro ao gerar insight', {
       requestId,

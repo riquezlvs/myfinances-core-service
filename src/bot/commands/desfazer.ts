@@ -1,6 +1,7 @@
 import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
 import { desfazerUltimaTransacao } from '../../services/transactions/transactionService';
+import { RODAPE_UX } from '../../config/constants';
 
 export async function handleDesfazer(
   chatId: number,
@@ -21,5 +22,5 @@ export async function handleDesfazer(
         )}).`
       : `✅ Gasto #${resultado.displayIds[0]} desfeito.`;
 
-  await bot.sendMessage(chatId, mensagem);
+  await bot.sendMessage(chatId, `${mensagem}\n\n${RODAPE_UX}`);
 }

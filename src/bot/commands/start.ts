@@ -25,7 +25,7 @@ export async function handleStart(chatId: number, bot: TelegramBot = getTelegram
       '/grafico — gráfico de gastos por categoria (imagem)',
       '/insight — análise inteligente dos seus gastos do mês',
       '/meta <categoria> <limite> — metas de gasto (alertas em 80%/100%)',
-      '/cartao — cartões com fechamento e fatura por período real',
+      '/cartao — cartões e vales (credito|vr|va): principal, fechamento e fatura',
       '',
       'Também entendo frases livres como "minha irmã já pagou 25 reais" —',
       'eu identifico sozinho se é um gasto novo, um pagamento ou uma consulta.',

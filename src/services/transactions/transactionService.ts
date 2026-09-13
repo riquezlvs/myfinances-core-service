@@ -1,8 +1,25 @@
+// src/services/transactions/transactionService.ts
 import { getSupabaseClient } from '../../clients/supabaseClient';
 import { withTiming, log } from '../../utils/logger';
+import { randomUUID } from 'crypto';
 import { resolveThirdPartyId } from '../people/peopleService';
 import { calcularParcelas } from './installments';
+import { mesAnoAtual, intervaloDoMes } from '../../utils/month';
 import type { ParsedTransaction, PaymentMethod } from '../../types/transaction';
+
+/**
+ * Fase 7 (7.2) — Calcula quanto fica para o terceiro quando há divisão.
+ * Antes, `third_party_share_amount` só era preenchido se a IA o inferisse
+ * (o que nunca acontecia no schema) e o módulo de dívidas nunca via nada.
+ * Agora é derivado automaticamente: total - minha parte. Sem terceiro
+ * resolvido, é sempre 0. Sem `my_share_amount` mas com terceiro, assume-se
+ * que o total inteiro é responsabilidade do terceiro (ex: "paguei o Uber
+ * da Maria, 40 reais" sem menção de divisão).
+ */
+function calcularThirdPartyShare(totalAmount: number, myShareAmount: number | null | undefined): number {
+  const minhaParte = myShareAmount ?? 0;
+  return Math.round((totalAmount - minhaParte) * 100) / 100;
+}
 
 /**
  * Insere a transação. Se `installment_total` >= 2, divide o valor em N
@@ -15,15 +32,100 @@ export async function registrarTransacao(
   rawInput: string,
   requestId: string
 ): Promise<{ displayIds: number[] }> {
-  let thirdPartyId: string | null = null;
-  if (dados.third_party_name) {
-    thirdPartyId = await resolveThirdPartyId(dados.third_party_name, requestId);
-  }
+  // 8.7 — Split múltiple: lista de TODAS as pessoas da divisão (a IA envia
+  // third_party_names; o campo singular antigo continua aceito como 1 pessoa).
+  const nomesTerceiros = dados.third_party_names?.length
+    ? dados.third_party_names
+    : dados.third_party_name
+      ? [dados.third_party_name]
+      : [];
 
   const ehParcelado = !!dados.installment_total && dados.installment_total >= 2;
+  // Parcelado e dividido entre várias pessoas ao mesmo tempo não combinam
+  // (cada parcela teria N linhas de dívida): o parcelado tem prioridade.
+  const ehSplitMultiplo = nomesTerceiros.length > 1 && !ehParcelado;
 
-  return withTiming('inserir transação no Supabase', { requestId, parcelado: ehParcelado }, async () => {
+  let thirdPartyId: string | null = null;
+  if (!ehSplitMultiplo && nomesTerceiros.length === 1) {
+    thirdPartyId = await resolveThirdPartyId(nomesTerceiros[0], requestId);
+  }
+  const thirdPartyShareTotal = thirdPartyId
+    ? calcularThirdPartyShare(dados.total_amount, dados.my_share_amount)
+    : 0;
+
+  return withTiming('inserir transação no Supabase', { requestId, parcelado: ehParcelado, split: ehSplitMultiplo }, async () => {
     const supabase = getSupabaseClient();
+
+    // ------------------------------------------------------------------
+    // 8.7 — SPLIT MÚLTIPLE: 1 transação principal (minha parte) + 1 linha
+    // de dívida por pessoa (total_amount = 0; a parte da pessoa vai em
+    // third_party_share_amount, refletindo automaticamente em /dividas).
+    // Todas compartilham o mesmo installment_group_id (grupo de split) para
+    // que o desfazer remova o conjunto inteiro de uma vez.
+    // ------------------------------------------------------------------
+    if (ehSplitMultiplo) {
+      const nomes = nomesTerceiros;
+      const qtd = nomes.length;
+      const ids = await Promise.all(nomes.map((n) => resolveThirdPartyId(n, requestId)));
+
+      const total = dados.total_amount;
+      // Minha parte: informada pela IA ou equitativa (total / (pessoas + você)).
+      const minhaParte =
+        dados.my_share_amount != null
+          ? Math.min(Math.round(dados.my_share_amount * 100) / 100, total)
+          : Math.round((total / (qtd + 1)) * 100) / 100;
+      const restante = Math.round((total - minhaParte) * 100) / 100;
+      const parteBase = Math.round((restante / qtd) * 100) / 100;
+      const grupoSplit = randomUUID();
+
+      const linhaPrincipal = {
+        description: dados.description,
+        total_amount: total,
+        category_id: dados.category_id,
+        payment_method: dados.payment_method,
+        card_id: dados.card_id ?? null,
+        occurred_at: dados.occurred_at,
+        my_share_amount: minhaParte,
+        third_party_id: null,
+        third_party_share_amount: 0,
+        raw_input: rawInput,
+        installment_group_id: grupoSplit,
+      };
+
+      const linhasDivida = ids.map((id, i) => {
+        // A primeira pessoa absorve o resíduo do arredondamento (centavos),
+        // garantindo que a soma das partes seja exatamente o restante.
+        const parte =
+          i === 0 ? Math.round((restante - parteBase * (qtd - 1)) * 100) / 100 : parteBase;
+        return {
+          description: `${dados.description} (parte de ${nomes[i]})`,
+          total_amount: 0,
+          category_id: dados.category_id,
+          payment_method: dados.payment_method,
+          card_id: null,
+          occurred_at: dados.occurred_at,
+          my_share_amount: 0,
+          third_party_id: id,
+          third_party_share_amount: parte,
+          raw_input: `${rawInput} [divisão: ${nomes[i]}]`,
+          installment_group_id: grupoSplit,
+        };
+      });
+
+      const { data, error } = await supabase
+        .from('transactions')
+        .insert([linhaPrincipal, ...linhasDivida])
+        .select('display_id');
+      if (error) throw new Error(`Erro ao inserir despesa dividida no Supabase: ${error.message}`);
+
+      log('info', 'Despesa dividida entre várias pessoas registrada', {
+        requestId,
+        pessoas: nomes.join(', '),
+        minhaParte,
+        qtd_linhas: data?.length ?? 0,
+      });
+      return { displayIds: (data ?? []).map((d) => d.display_id as number) };
+    }
 
     if (!ehParcelado) {
       const { data, error } = await supabase
@@ -33,9 +135,11 @@ export async function registrarTransacao(
           total_amount: dados.total_amount,
           category_id: dados.category_id,
           payment_method: dados.payment_method,
+          card_id: dados.card_id ?? null,
           occurred_at: dados.occurred_at,
           my_share_amount: dados.my_share_amount ?? null,
           third_party_id: thirdPartyId,
+          third_party_share_amount: thirdPartyShareTotal,
           raw_input: rawInput,
         })
         .select('display_id')
@@ -47,20 +151,25 @@ export async function registrarTransacao(
 
     const parcelas = calcularParcelas(dados.total_amount, dados.installment_total as number, dados.occurred_at);
 
-    // Divide my_share_amount proporcionalmente a cada parcela, mantendo a
-    // mesma proporção do valor total (ex: se 50% é minha parte no total,
-    // 50% de cada parcela também é).
+    // Divide my_share_amount e third_party_share_amount proporcionalmente a
+    // cada parcela, mantendo a mesma proporção do valor total (ex: se 50% é
+    // minha parte no total, 50% de cada parcela também é — e o mesmo vale
+    // para a parte do terceiro).
     const linhas = parcelas.map((p) => ({
       description: `${dados.description} ${p.descriptionSuffix}`,
       total_amount: p.amount,
       category_id: dados.category_id,
       payment_method: dados.payment_method,
+      card_id: dados.card_id ?? null,
       occurred_at: p.occurredAt,
       my_share_amount:
         dados.my_share_amount != null
           ? Math.round((dados.my_share_amount / dados.total_amount) * p.amount * 100) / 100
           : null,
       third_party_id: thirdPartyId,
+      third_party_share_amount: thirdPartyId
+        ? Math.round((thirdPartyShareTotal / dados.total_amount) * p.amount * 100) / 100
+        : 0,
       raw_input: rawInput,
       installment_group_id: p.installmentGroupId,
       installment_number: p.installmentNumber,
@@ -93,22 +202,17 @@ export async function atualizarCategoria(displayId: number, categoryId: number, 
 
 export async function atualizarMetodo(displayId: number, metodo: PaymentMethod, requestId: string): Promise<void> {
   await withTiming('atualizar método de pagamento', { requestId, displayId, metodo }, async () => {
+    // Troca manual de método invalida o cartão inferido na criação (8.2):
+    // um card_id órfão de outro tipo corromperia fatura/vale.
     const { error } = await getSupabaseClient()
       .from('transactions')
-      .update({ payment_method: metodo })
+      .update({ payment_method: metodo, card_id: null })
       .eq('display_id', displayId);
 
     if (error) throw new Error(`Erro ao atualizar método: ${error.message}`);
   });
 }
 
-/**
- * 🔧 CORREÇÃO DO BUG: apaga uma transação por display_id, mas se ela fizer
- * parte de uma compra parcelada (installment_group_id não nulo), apaga
- * TODAS as linhas daquele grupo — nunca apenas a linha encontrada. Isso
- * evita deixar parcelas "órfãs" ativas no banco. Usada tanto pelo
- * /desfazer quanto pelo botão inline ❌ e pelo /apagar <id>.
- */
 export async function apagarTransacaoComGrupo(
   displayId: number,
   requestId: string
@@ -151,11 +255,6 @@ export async function apagarTransacaoComGrupo(
   });
 }
 
-/**
- * Apaga a transação mais recente (por created_at). Delega para
- * apagarTransacaoComGrupo — se a última linha inserida pertencer a uma
- * compra parcelada, o grupo inteiro é removido junto.
- */
 export async function desfazerUltimaTransacao(requestId: string): Promise<{ displayIds: number[] } | null> {
   return withTiming('desfazer última transação', { requestId }, async () => {
     const supabase = getSupabaseClient();
@@ -174,7 +273,6 @@ export async function desfazerUltimaTransacao(requestId: string): Promise<{ disp
   });
 }
 
-/** Comando /apagar <id>. Também é group-aware (ver apagarTransacaoComGrupo). */
 export async function apagarTransacaoPorId(
   displayId: number,
   requestId: string
@@ -185,14 +283,101 @@ export async function apagarTransacaoPorId(
 
 export async function getUltimosGastos(limite: number, requestId: string) {
   return withTiming('buscar últimos gastos', { requestId, limite }, async () => {
+    // 8.7 — Filas de dívida do split têm total_amount = 0: não são gastos.
     const { data, error } = await getSupabaseClient()
       .from('transactions')
       .select('display_id, description, total_amount, occurred_at, payment_method, categories(name)')
+      .gt('total_amount', 0)
       .order('occurred_at', { ascending: false })
       .limit(limite);
 
     if (error) throw new Error(`Erro ao buscar últimos gastos: ${error.message}`);
     return data ?? [];
+  });
+}
+
+/** 8.4 — Item retornado por una consulta granular (categoria e/ou mês). */
+export interface ItemGastoConsulta {
+  display_id: number;
+  description: string;
+  total_amount: number;
+  occurred_at: string;
+  categoria: string | null;
+  payment_method: string | null;
+}
+
+/** 8.4 — Resultado agregado de `consultarGastosGranulares`. */
+export interface ResultadoConsultaGranular {
+  /** Suma EXACTA del período (sin tope de `limite`). */
+  total: number;
+  /** Detalle (los `limite` más recientes del período). */
+  items: ItemGastoConsulta[];
+}
+
+/**
+ * 8.4 — Consulta granular determinística para perguntas em linguagem natural
+ * ("quanto gastei com transporte em agosto?"). O `month` já vem validado
+ * pelo intentGuard (regex YYYY-MM) e por `mesAnoNaJanela` EM CÓDIGO; esta
+ * função NUNCA recebe um mês alucinado. `categoryId` é resolvido pelo
+ * handler contra o catálogo do Supabase — a IA nunca pede IDs.
+ */
+export async function consultarGastosGranulares(
+  filtro: { categoryId?: number; month?: string; limite?: number },
+  requestId: string
+): Promise<ResultadoConsultaGranular> {
+  return withTiming('consultar gastos granulares', { requestId, filtro }, async () => {
+    const mes = filtro.month ?? mesAnoAtual();
+    const intervalo = intervaloDoMes(mes);
+    if (!intervalo) {
+      // Rede de segurança: mesmo que um bug deixe passar um mês malformado,
+      // a query jamais é montada com uma data alucinada.
+      throw new Error(`Mês inválido para consulta granular: ${mes}`);
+    }
+
+    const supabase = getSupabaseClient();
+
+    // 1) Soma EXATA do período (sem limite) — responde "quanto gastei?".
+    let builderTotal = supabase
+      .from('transactions')
+      .select('total_amount')
+      .gte('occurred_at', intervalo.inicioISO)
+      .lt('occurred_at', intervalo.fimISO);
+    if (filtro.categoryId) builderTotal = builderTotal.eq('category_id', filtro.categoryId);
+
+    // 2) Detalhe (últimos N do período, mais recentes primeiro). Filas de dívida
+    // do split (total 0) não aparecem no detalhe.
+    let builderDetalle = supabase
+      .from('transactions')
+      .select('display_id, description, total_amount, occurred_at, payment_method, categories(name)')
+      .gte('occurred_at', intervalo.inicioISO)
+      .lt('occurred_at', intervalo.fimISO)
+      .gt('total_amount', 0)
+      .order('occurred_at', { ascending: false })
+      .limit(filtro.limite ?? 20);
+    if (filtro.categoryId) builderDetalle = builderDetalle.eq('category_id', filtro.categoryId);
+
+    // Rodam em paralelo: latência = max(agregado, detalhe), não a soma.
+    const [{ data: dTotal, error: eTotal }, { data, error }] = await Promise.all([
+      builderTotal,
+      builderDetalle,
+    ]);
+
+    if (eTotal) throw new Error(`Erro ao somar consulta granular: ${eTotal.message}`);
+    if (error) throw new Error(`Erro ao listar consulta granular: ${error.message}`);
+
+    const total = (dTotal ?? []).reduce((acc, t) => acc + Number(t.total_amount), 0);
+
+    return {
+      total,
+      items: (data ?? []).map((t) => ({
+        display_id: t.display_id as number,
+        description: t.description as string,
+        total_amount: Number(t.total_amount),
+        occurred_at: t.occurred_at as string,
+        categoria: (t as any).categories?.name ?? null,
+        payment_method: (t as any).payment_method ?? null,
+      })),
+    };
   });
 }
 
@@ -214,9 +399,11 @@ export async function getResumoMensal(requestId: string): Promise<ResumoMensal> 
     const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString();
     const primeiroDiaProxMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 1).toISOString();
 
+    // 8.7 — Filas de dívida do split (total 0) não contam como lançamentos.
     const { data, error } = await getSupabaseClient()
       .from('transactions')
       .select('total_amount, my_share_amount, payment_method, is_recurring')
+      .gt('total_amount', 0)
       .gte('occurred_at', primeiroDia)
       .lt('occurred_at', primeiroDiaProxMes);
 
@@ -241,12 +428,25 @@ export async function getResumoMensal(requestId: string): Promise<ResumoMensal> 
   });
 }
 
-/** Gasto total por dia do mês corrente (índice 0 = dia 1). Usado pelo sparkline do /resumo. */
+/**
+ * Fase 7 (7.1) — Gasto total por dia do mês corrente (índice 0 = dia 1),
+ * usado pelo sparkline do /resumo. Antes usava `getFullYear/getMonth/getDate`
+ * (fuso local do processo); agora todo o cálculo — limites do mês e o dia
+ * de cada lançamento — usa UTC, evitando que um gasto perto da meia-noite
+ * (ex.: 23h30 BRT = madrugada UTC do dia seguinte) caia no dia errado do
+ * gráfico. Nota: esta função e `getResumoMensal`/`getGastosPorCategoria`
+ * (que seguem em horário local) podem, em teoria, discordar sobre qual é
+ * o "mês atual" nos poucos minutos ao redor da virada de mês em UTC — é
+ * um limite aceito do escopo do item 7.1, que mira especificamente o
+ * agrupamento diário/sparkline.
+ */
 export async function getGastosDiariosDoMes(requestId: string): Promise<number[]> {
   return withTiming('buscar gastos diários do mês', { requestId }, async () => {
     const hoje = new Date();
-    const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString();
-    const primeiroDiaProxMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 1).toISOString();
+    const primeiroDia = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth(), 1)).toISOString();
+    const primeiroDiaProxMes = new Date(
+      Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() + 1, 1)
+    ).toISOString();
 
     const { data, error } = await getSupabaseClient()
       .from('transactions')
@@ -256,11 +456,11 @@ export async function getGastosDiariosDoMes(requestId: string): Promise<number[]
 
     if (error) throw new Error(`Erro ao buscar gastos diários: ${error.message}`);
 
-    const ultimoDia = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
+    const ultimoDia = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() + 1, 0)).getUTCDate();
     const porDia = new Array<number>(ultimoDia).fill(0);
 
     for (const t of data ?? []) {
-      const dia = new Date(t.occurred_at as string).getDate();
+      const dia = new Date(t.occurred_at as string).getUTCDate();
       if (dia >= 1 && dia <= ultimoDia) {
         porDia[dia - 1] += Number(t.total_amount);
       }
@@ -274,7 +474,6 @@ export interface GastoPorCategoria {
   total: number;
 }
 
-/** Gasto total agregado por categoria no mês corrente (ordenado, maior primeiro). */
 export async function getGastosPorCategoria(requestId: string): Promise<GastoPorCategoria[]> {
   return withTiming('buscar gastos por categoria', { requestId }, async () => {
     const hoje = new Date();
@@ -316,10 +515,12 @@ export async function getFaturaMensal(requestId: string): Promise<ItemFatura[]> 
     const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString();
     const primeiroDiaProxMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 1).toISOString();
 
+        // 8.7 — Filas de dívida do split (total 0) não entram na fatura.
     const { data, error } = await getSupabaseClient()
       .from('transactions')
       .select('display_id, description, total_amount, occurred_at, installment_number, installment_total')
       .eq('payment_method', 'credit_card')
+      .gt('total_amount', 0)
       .gte('occurred_at', primeiroDia)
       .lt('occurred_at', primeiroDiaProxMes)
       .order('occurred_at', { ascending: true });

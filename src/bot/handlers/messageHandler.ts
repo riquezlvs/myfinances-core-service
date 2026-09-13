@@ -5,10 +5,9 @@ import { getTelegramBot } from '../../clients/telegramClient';
 import { log, withTiming } from '../../utils/logger';
 import { AUTHORIZED_USER_ID } from '../../config/env';
 import { classificarIntencao } from '../../services/gemini/intentRouter';
-import { interpretarGasto } from '../../services/gemini/transactionParser';
 import { processarPagamento } from '../../services/debts/debtService';
 import { extrairNomeEValorDeFrase } from '../../utils/textParsers';
-import { formatarPagamento } from '../../utils/formatters';
+import { formatarPagamento, formatarReal, formatarDataCurta } from '../../utils/formatters';
 import { registrarEResponderGasto } from './novoGasto';
 import { handleStart } from '../commands/start';
 import { handleResumo } from '../commands/resumo';
@@ -28,19 +27,64 @@ import { handleGrafico } from '../commands/grafico';
 import { handleInsight } from '../commands/insight';
 import { handleMeta } from '../commands/meta';
 import { handleCartao } from '../commands/cartao';
+import { handlePoupanca } from '../commands/poupanca';
+import { handleStatus } from '../commands/status';
+import { handleViagem } from '../commands/viagem';
+import { getCategoryMap } from '../../services/categories/categoryCache';
+import { enqueue } from '../../utils/concurrency';
+import { verificarRateLimit, tokensRestantes } from '../../utils/rateLimit';
+import {
+  consultarGastosGranulares,
+  type ResultadoConsultaGranular,
+} from '../../services/transactions/transactionService';
+import { mesAnoNaJanela, mesAnoAtual, rotuloDoMes } from '../../utils/month';
+import { logRota } from '../../utils/logger';
+import { RODAPE_UX, MAX_MONTH_LOOKBACK } from '../../config/constants';
+import type { Intent, IntentParams, IntentPayload, ParsedTransaction } from '../../types/transaction';
 
+/**
+ * 8.1 — Mapa de auditabilidade: intent classificada → rota (handler) efetiva.
+ * Registrado via logRota em cada mensagem processada pelo registry.
+ */
+const ROTAS_POR_INTENT: Record<Intent, string> = {
+  NOVO_GASTO: 'novoGasto',
+  PAGAMENTO_DIVIDA: 'pagamentoDivida',
+  CONSULTA: 'consulta',
+  EXPORTAR: 'exportarViaIA',
+  META: 'metaViaIA',
+  CARTAO: 'cartaoViaIA',
+  RECORRENTE: 'recorrenteViaIA',
+  GRAFICO: 'grafico',
+  INSIGHT: 'insight',
+  POUPANCA: 'poupancaViaIA',
+  CONFIRMACAO_REQUERIDA: 'confirmacaoRequerida',
+  OUTROS: 'outros',
+};
+
+type Rota = (typeof ROTAS_POR_INTENT)[Intent] | 'comandoSlash' | 'rateLimit';
+
+/**
+ * NOVO_GASTO — Fase 8 (payload único): a transação JÁ vem validada pelo
+ * transactionGuard dentro do IntentPayload (o intentRouter fez o 2º estágio).
+ * Aqui NÃO há segunda chamada ao Gemini: economiza quota e elimina a janela
+ * em que duas respostas de IA divergiam (intent de uma, JSON de outra).
+ */
 async function handleNovoGasto(
   chatId: number,
-  texto: string,
+  transaction: ParsedTransaction,
+  avisos: string[],
+  rawInput: string,
   requestId: string,
   bot: TelegramBot
 ): Promise<void> {
-  const dados = await interpretarGasto(texto, requestId);
-  log('info', 'JSON estruturado pelo Gemini', { requestId, dados });
+  log('info', 'Transação estruturada e validada (payload único do Gemini)', {
+    requestId,
+    transaction,
+  });
 
   // Salvamento + confirmação com botões vivem em novoGasto.ts, compartilhados
   // com o fluxo de áudio (voiceHandler) para garantir UX idêntica.
-  await registrarEResponderGasto(chatId, dados, texto, requestId, bot);
+  await registrarEResponderGasto(chatId, transaction, rawInput, requestId, bot, avisos);
 }
 
 async function handlePagamentoDivida(
@@ -61,22 +105,186 @@ async function handlePagamentoDivida(
   }
 
   const resultado = await processarPagamento(extraido.nome, extraido.valor, requestId);
-  await bot.sendMessage(chatId, formatarPagamento(resultado));
+  await bot.sendMessage(chatId, formatarPagamento(resultado) + `\n\n${RODAPE_UX}`);
 }
 
-async function handleConsulta(chatId: number, bot: TelegramBot): Promise<void> {
+/**
+ * 8.4 — Normaliza o nome de categoria citado pelo usuário: sem acentos, em
+ * minúsculas e sem espaços ao redor. Permite que "transporte" coincida com
+ * "Transporte" no catálogo.
+ */
+function normalizarCategoriaTexto(nome: string): string {
+  return nome.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
+}
+
+/**
+ * 8.4 — Resolve o NOME da categoria (extraído pela IA) contra o catálogo do
+ * Supabase. Retorna undefined se não coincidir: o código NUNCA inventa/
+ * adivinha um category_id por texto livre.
+ */
+function resolverCategoria(nome: string, categoryMap: Record<number, string>): number | undefined {
+  const alvo = normalizarCategoriaTexto(nome);
+  for (const [id, nomeCatalogo] of Object.entries(categoryMap)) {
+    if (normalizarCategoriaTexto(nomeCatalogo) === alvo) return Number(id);
+  }
+  return undefined;
+}
+
+/**
+ * 8.4 — Formata a resposta de uma consulta granular. 100% determinística
+ * (services + formatters): a IA classificou, mas o CÓDIGO decide o que mostrar.
+ */
+async function enviarRespuestaConsultaGranular(
+  chatId: number,
+  categoriaNome: string | undefined,
+  mes: string,
+  resultado: ResultadoConsultaGranular,
+  bot: TelegramBot
+): Promise<void> {
+  const titulo = categoriaNome ? `${categoriaNome} · ${rotuloDoMes(mes)}` : `Gastos de ${rotuloDoMes(mes)}`;
+
+  if (resultado.total === 0) {
+    await bot.sendMessage(
+      chatId,
+      `📊 *${titulo}*\n\nNão registrei gastos nesse período. 🤷\n\n${RODAPE_UX}`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  const linhas = resultado.items.map((g) => {
+    const metodo = g.payment_method ? ` · ${g.payment_method.replace(/_/g, ' ')}` : '';
+    return `#${g.display_id} · 📅 ${formatarDataCurta(g.occurred_at)} · ${g.description} · R$ ${formatarReal(
+      g.total_amount
+    )}${metodo}`;
+  });
+
   await bot.sendMessage(
     chatId,
     [
-      '🔎 Parece que você quer consultar alguma informação.',
+      `📊 *${titulo}*`,
       '',
-      'Use um destes comandos:',
-      '/resumo — resumo do mês',
-      '/fatura — fatura do cartão',
-      '/dividas — quem te deve',
-      '/gastos [n] — últimos gastos',
-    ].join('\n')
+      `💸 Total: R$ ${formatarReal(resultado.total)}`,
+      '',
+      ...linhas,
+      '',
+      RODAPE_UX,
+    ].join('\n'),
+    { parse_mode: 'Markdown' }
   );
+}
+
+/**
+ * 8.4 — CONSULTA granular por linguagem natural: "quanto gastei com transporte
+ * em agosto?". Os params já foram validados pelo intentGuard; o mês é
+ * revalidado com o hard-limit EM CÓDIGO (mesAnoNaJanela) e a categoria é
+ * resolvida contra o catálogo. Resposta determinística, sem segunda IA.
+ */
+async function handleConsultaGranular(
+  chatId: number,
+  params: IntentParams,
+  requestId: string,
+  bot: TelegramBot
+): Promise<void> {
+  // Hard-limit em código: a IA não escolhe a janela de meses consultáveis.
+  if (params.month && !mesAnoNaJanela(params.month)) {
+    await bot.sendMessage(
+      chatId,
+      `⚠️ Só consigo consultar os últimos ${MAX_MONTH_LOOKBACK} meses (ou o próximo). Me pergunte por outro período.\n\n${RODAPE_UX}`
+    );
+    return;
+  }
+
+  const mes = params.month ?? mesAnoAtual();
+
+  if (params.category) {
+    const categoryMap = await getCategoryMap(requestId);
+    const categoryId = resolverCategoria(params.category, categoryMap);
+    if (!categoryId) {
+      const validas = Object.values(categoryMap).map((n) => `• ${n}`).join('\n');
+      await bot.sendMessage(
+        chatId,
+        `🤔 Não reconheço a categoria "${params.category}". Minhas categorias são:\n${validas}\n\n${RODAPE_UX}`
+      );
+      return;
+    }
+
+    log('info', 'Consulta granular: categoria resolvida em código (a IA nunca decide category_id)', {
+      requestId,
+      citada: params.category,
+      categoryId,
+    });
+
+    const resultado = await consultarGastosGranulares({ categoryId, month: mes, limite: params.limite }, requestId);
+    log('info', 'Consulta granular executada em código', {
+      requestId,
+      categoryId,
+      mes,
+      total: resultado.total,
+      items: resultado.items.length,
+    });
+    await enviarRespuestaConsultaGranular(chatId, categoryMap[categoryId], mes, resultado, bot);
+    return;
+  }
+
+  // Sem categoria: filtro temporal sobre todos os gastos do mês citado.
+  const resultado = await consultarGastosGranulares(
+    { month: mes, limite: params.limite ?? 20 },
+    requestId
+  );
+  log('info', 'Consulta granular (apenas mês) executada em código', {
+    requestId,
+    mes,
+    total: resultado.total,
+    items: resultado.items.length,
+  });
+  await enviarRespuestaConsultaGranular(chatId, undefined, mes, resultado, bot);
+}
+
+/**
+ * CONSULTA parametrizada (Fase 2 + 8.4): a IA só classifica A QUAL entidade o
+ * usuário quer acesso; a resposta é 100% determinística (services +
+ * formatters), sem geração de texto por LLM. Com categoria/mês citados passa
+ * à consulta granular. Sem entidade reconhecida, orienta o usuário.
+ */
+async function handleConsulta(
+  chatId: number,
+  params: IntentParams,
+  requestId: string,
+  bot: TelegramBot
+): Promise<void> {
+  // 8.4 — Consulta granular: categoria e/ou mês citados pelo usuário.
+  if (params.category || params.month || params.type === 'gasto') {
+    await handleConsultaGranular(chatId, params, requestId, bot);
+    return;
+  }
+
+  switch (params.entidade) {
+    case 'resumo':
+      await handleResumo(chatId, requestId, bot);
+      return;
+    case 'fatura':
+      await handleFatura(chatId, requestId, bot);
+      return;
+    case 'dividas':
+      await handleDividas(chatId, requestId, bot);
+      return;
+    case 'gastos':
+      await handleGastos(chatId, params.limite ?? 5, requestId, bot);
+      return;
+    default:
+      await bot.sendMessage(
+        chatId,
+        [
+          '🔎 Posso te mostrar:',
+          '',
+          '• resumo do mês — "qual o resumo do mês?" ou /resumo',
+          '• fatura do cartão — "me mostra a fatura" ou /fatura',
+          '• dívidas — "quem me deve?" ou /dividas',
+          '• últimos gastos — "meus últimos 10 gastos" ou /gastos [n]',
+        ].join('\n')
+      );
+  }
 }
 
 async function handleOutros(chatId: number, bot: TelegramBot): Promise<void> {
@@ -84,6 +292,200 @@ async function handleOutros(chatId: number, bot: TelegramBot): Promise<void> {
     chatId,
     'Não entendi muito bem 🤔 Mande um gasto (ex: "Gastei 30 no mercado") ou use /start para ver os comandos.'
   );
+}
+
+/**
+ * Regra de segurança (Fase 3 — Double-Opt-In): o roteador de IA NUNCA executa
+ * operações destrutivas. Se a intenção classificada exige remoção, o bot
+ * responde apontando o comando explícito — a ação só acontece fora da cadeia
+ * do LLM (texto "/" ou clique em botão inline).
+ */
+async function recusarDestrutivaViaIA(
+  chatId: number,
+  descricao: string,
+  comandoSeguro: string,
+  bot: TelegramBot
+): Promise<void> {
+  await bot.sendMessage(
+    chatId,
+    '🔒 Por segurança, não executo remoções por conversa.' +
+      (descricao ? ` (Você pediu: "${descricao}")` : '') +
+      `\nConfirme com o comando direto: ${comandoSeguro}`
+  );
+}
+
+/** EXPORTAR via linguagem natural — "manda a planilha de setembro". */
+async function handleExportarViaIA(
+  chatId: number,
+  params: IntentParams,
+  requestId: string,
+  bot: TelegramBot
+): Promise<void> {
+  const tipoExport = params.tipoExport ?? 'gastos';
+
+  // Hard-limit em código: a IA não escolhe a janela de exportação.
+  if (params.month && tipoExport !== 'dividas' && !mesAnoNaJanela(params.month)) {
+    await bot.sendMessage(
+      chatId,
+      '⚠️ Só consigo exportar meses dos últimos 12 (ou o próximo). Me diga outro período — ex: "exporta setembro" ou /exportar.'
+    );
+    return;
+  }
+
+  await handleExportar(
+    chatId,
+    tipoExport === 'dividas' ? 'dividas' : 'gastos',
+    requestId,
+    bot,
+    params.month ? { mesAno: params.month } : {}
+  );
+}
+
+/** META via linguagem natural — listar/definir; remover exige comando (Tier 2). */
+async function handleMetaViaIA(
+  chatId: number,
+  params: IntentParams,
+  requestId: string,
+  bot: TelegramBot
+): Promise<void> {
+  if (params.accionMeta === 'remover') {
+    await recusarDestrutivaViaIA(chatId, params.categoriaMeta ?? '', '/meta remover <categoria>', bot);
+    return;
+  }
+  if (params.accionMeta === 'definir') {
+    if (!params.categoriaMeta || params.limiteMeta == null) {
+      await bot.sendMessage(
+        chatId,
+        '🎯 Entendi que você quer definir uma meta. Me diga a categoria e o limite — ex: "meta de 600 para alimentação".'
+      );
+      return;
+    }
+    await handleMeta(chatId, `${params.categoriaMeta} ${params.limiteMeta}`, requestId, bot);
+    return;
+  }
+  await handleMeta(chatId, '', requestId, bot);
+}
+
+/** CARTAO via linguagem natural — listar/fatura/add; remover exige comando (Tier 2). */
+async function handleCartaoViaIA(
+  chatId: number,
+  params: IntentParams,
+  requestId: string,
+  bot: TelegramBot
+): Promise<void> {
+  switch (params.accionCartao) {
+    case 'add':
+      if (!params.nomeCartao || params.closingDay == null) {
+        await bot.sendMessage(
+          chatId,
+          '💳 Para cadastrar o cartão, me diga o nome e o dia de fechamento (1–28) — ex: "cadastra o cartão nubank, fecha dia 20" ou /cartao add nubank 20.'
+        );
+        return;
+      }
+      await handleCartao(chatId, `add ${params.nomeCartao} ${params.closingDay}`, requestId, bot);
+      return;
+    case 'fatura':
+      await handleCartao(chatId, params.nomeCartao ? `fatura ${params.nomeCartao}` : 'fatura', requestId, bot);
+      return;
+    case 'remover':
+      await recusarDestrutivaViaIA(chatId, params.nomeCartao ?? '', '/cartao remover <nome>', bot);
+      return;
+    default:
+      await handleCartao(chatId, '', requestId, bot);
+  }
+}
+
+/**
+ * RECORRENTE via linguagem natural: o schema de params não carrega
+ * descrição/valor/dia (nem deveria — são dados financeiros que o comando
+ * determinístico valida melhor), então 'add' orienta o uso do comando.
+ */
+async function handleRecorrenteViaIA(
+  chatId: number,
+  params: IntentParams,
+  requestId: string,
+  bot: TelegramBot
+): Promise<void> {
+  switch (params.accionRecorrente) {
+    case 'add':
+      await bot.sendMessage(
+        chatId,
+        '🔁 Para adicionar uma despesa fixa use:\n/recorrente add <descrição> <valor> <dia> [categoria]\nex: /recorrente add Netflix 39,90 15'
+      );
+      return;
+    case 'remover':
+      await recusarDestrutivaViaIA(chatId, '', '/recorrente remover <id>', bot);
+      return;
+    default:
+      await handleRecorrenteListar(chatId, requestId, bot);
+  }
+}
+
+/**
+ * CONFIRMACAO_REQUERIDA — destino OBRIGATÓRIO de pedidos destrutivos
+ * classificados pela IA ("apaga o gasto de ontem"). Nada é executado aqui:
+ * o usuário recebe os comandos explícitos e decide fora da cadeia do LLM.
+ */
+async function handleConfirmacaoRequerida(
+  chatId: number,
+  params: IntentParams,
+  bot: TelegramBot
+): Promise<void> {
+  await bot.sendMessage(
+    chatId,
+    [
+      '🔒 Isso parece um pedido para apagar/remover dados — e eu nunca apago nada por conversa.',
+      '',
+      'Use os comandos diretos:',
+      '• /apagar <id> — remove um gasto',
+      '• /desfazer — desfaz o último lançamento',
+      '• /meta remover <categoria> — remove uma meta',
+      '• /cartao remover <nome> — remove um cartão',
+      '• /recorrente remover <id> — desativa uma recorrência',
+      params.pedidoDescricao ? `\n(Você pediu: "${params.pedidoDescricao}")` : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+  );
+}
+
+/** POUPANCA via linguagem natural — "quero juntar 5000 para viagem até dezembro". */
+async function handlePoupancaViaIA(
+  chatId: number,
+  params: IntentParams,
+  requestId: string,
+  bot: TelegramBot
+): Promise<void> {
+  const nome = params.nomePoupanca;
+  const valor = params.valorPoupanca;
+  const prazo = params.prazoPoupanca;
+
+  if (params.accionPoupanca === 'definir') {
+    if (!nome || valor == null) {
+      await bot.sendMessage(
+        chatId,
+        '🐷 Entendi que você quer criar uma meta de poupança. Me diga o nome e o valor — ' +
+          'ex: "quero juntar 5000 para viagem até dezembro".'
+      );
+      return;
+    }
+    await handlePoupanca(chatId, `definir ${nome} ${valor}${prazo ? ` ${prazo}` : ''}`, requestId, bot);
+    return;
+  }
+
+  if (params.accionPoupanca === 'adicionar') {
+    if (!nome || valor == null) {
+      await bot.sendMessage(
+        chatId,
+        '🐷 Para adicionar um aporte, me diga a meta e o valor — ex: "guardei 500 na viagem".'
+      );
+      return;
+    }
+    await handlePoupanca(chatId, `add ${nome} ${valor}`, requestId, bot);
+    return;
+  }
+
+  await handlePoupanca(chatId, '', requestId, bot);
 }
 
 async function rotearComando(
@@ -182,6 +584,12 @@ async function rotearComando(
     await handleInsight(chatId, requestId, bot);
     return true;
   }
+  if (texto.startsWith('/poupanca')) {
+    log('info', 'Comando: /poupanca', { requestId });
+    const argumentos = texto.replace(/^\/poupanca/i, '').trim();
+    await handlePoupanca(chatId, argumentos, requestId, bot);
+    return true;
+  }
   if (texto.startsWith('/meta')) {
     log('info', 'Comando: /meta', { requestId });
     const argumentos = texto.replace(/^\/meta/i, '').trim();
@@ -192,6 +600,17 @@ async function rotearComando(
     log('info', 'Comando: /cartao', { requestId });
     const argumentos = texto.replace(/^\/cartao/i, '').trim();
     await handleCartao(chatId, argumentos, requestId, bot);
+    return true;
+  }
+  if (texto.startsWith('/status')) {
+    log('info', 'Comando: /status', { requestId });
+    await handleStatus(chatId, requestId, bot);
+    return true;
+  }
+  if (texto.startsWith('/viagem')) {
+    log('info', 'Comando: /viagem', { requestId });
+    const argumentos = texto.replace(/^\/viagem/i, '').trim();
+    await handleViagem(chatId, argumentos, requestId, bot);
     return true;
   }
   if (texto.startsWith('/')) {
@@ -223,6 +642,17 @@ export async function messageHandler(
       return;
     }
 
+    // 9 — Rate limiting: protege contra abuso e estouro de cotas.
+    const chaveRateLimit = `user:${msg.from.id}`;
+    if (!verificarRateLimit(chaveRateLimit)) {
+      log('warn', '🚦 Rate limit excedido', { requestId, userId: msg.from.id, restante: tokensRestantes(chaveRateLimit) });
+      await bot.sendMessage(
+        chatId,
+        '🚦 Você está enviando mensagens rápido demais. Dá uma respirada e tenta de novo em alguns segundos — assim o sistema te atende melhor! 😅'
+      );
+      return;
+    }
+
     if (!msg.text) {
       log('info', 'Mensagem ignorada: sem texto', { requestId });
       await bot.sendMessage(chatId, '⚠️ Por enquanto só processo mensagens de texto e áudio.');
@@ -231,23 +661,93 @@ export async function messageHandler(
 
     const texto = msg.text.trim();
 
+    // 9 — Fila serial por chatId: evita race conditions quando o Telegram
+    // entrega múltiplas mensagens quase simultâneas.
+    const chaveFila = `chat:${chatId}`;
+    await enqueue(chaveFila, async () => {
+      await processarMensagemAutorizada(chatId, texto, requestId, bot, msg);
+    });
+  } catch (err) {
+    const mensagemErro = err instanceof Error ? err.message : 'Erro desconhecido.';
+    log('error', '❌ Fluxo terminou em erro', { requestId, erro: mensagemErro });
+    await bot.sendMessage(
+      chatId,
+      '❌ Não consegui processar sua mensagem. Tente novamente — se o problema persistir, ' +
+        'verifique o log (requestId para referência).'
+    );
+  }
+}
+
+/**
+ * 9 — Processamento da mensagem AUTORIZADA (após gate + rate limit + fila).
+ * Extraído para permitir o encapsulamento pela fila serial.
+ */
+async function processarMensagemAutorizada(
+  chatId: number,
+  texto: string,
+  requestId: string,
+  bot: TelegramBot,
+  msg: Message
+): Promise<void> {
+  try {
     const foiComando = await rotearComando(chatId, texto, requestId, bot);
     if (foiComando) return;
 
-    const intencao = await withTiming('rotear intenção da mensagem', { requestId }, () =>
+    await bot.sendChatAction(chatId, 'typing');
+
+    // Fase 8: UMA chamada ao Gemini retorna intent + params + transaction.
+    const payload: IntentPayload = await withTiming('rotear intenção da mensagem', { requestId }, () =>
       classificarIntencao(texto, requestId)
     );
-    log('info', 'Intenção classificada', { requestId, intencao });
+    log('info', 'Intenção classificada', { requestId, intent: payload.intent, params: payload.params });
+    logRota(requestId, ROTAS_POR_INTENT[payload.intent] ?? 'outros', {
+      intent: payload.intent,
+      params: payload.params,
+    });
 
-    switch (intencao) {
-      case 'NOVO_GASTO':
-        await handleNovoGasto(chatId, texto, requestId, bot);
+    // Registry determinístico: a IA classificou, o CÓDIGO decide o que roda.
+    switch (payload.intent) {
+      case 'NOVO_GASTO': {
+        if (!payload.transaction) {
+          // Defesa extra: o intentRouter já filtra isso, mas o handler nunca
+          // persiste um gasto sem os dados validados pelo guard.
+          log('warn', 'NOVO_GASTO sem transaction no payload; tratando como OUTROS', { requestId });
+          await handleOutros(chatId, bot);
+          break;
+        }
+        await handleNovoGasto(chatId, payload.transaction, payload.avisos, texto, requestId, bot);
         break;
+      }
       case 'PAGAMENTO_DIVIDA':
+        // Extração por regex determinística (nome + valor), não pela IA.
         await handlePagamentoDivida(chatId, texto, requestId, bot);
         break;
       case 'CONSULTA':
-        await handleConsulta(chatId, bot);
+        await handleConsulta(chatId, payload.params, requestId, bot);
+        break;
+      case 'EXPORTAR':
+        await handleExportarViaIA(chatId, payload.params, requestId, bot);
+        break;
+      case 'META':
+        await handleMetaViaIA(chatId, payload.params, requestId, bot);
+        break;
+      case 'CARTAO':
+        await handleCartaoViaIA(chatId, payload.params, requestId, bot);
+        break;
+      case 'RECORRENTE':
+        await handleRecorrenteViaIA(chatId, payload.params, requestId, bot);
+        break;
+      case 'GRAFICO':
+        await handleGrafico(chatId, requestId, bot);
+        break;
+      case 'INSIGHT':
+        await handleInsight(chatId, requestId, bot);
+        break;
+      case 'POUPANCA':
+        await handlePoupancaViaIA(chatId, payload.params, requestId, bot);
+        break;
+      case 'CONFIRMACAO_REQUERIDA':
+        await handleConfirmacaoRequerida(chatId, payload.params, bot);
         break;
       case 'OUTROS':
       default:

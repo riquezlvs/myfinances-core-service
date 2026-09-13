@@ -2,6 +2,7 @@ import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
 import { getSaldoTerceiros } from '../../services/debts/debtService';
 import { formatarReal } from '../../utils/formatters';
+import { RODAPE_UX } from '../../config/constants';
 
 export async function handleDividas(
   chatId: number,
@@ -10,9 +11,11 @@ export async function handleDividas(
 ): Promise<void> {
   const saldos = await getSaldoTerceiros(requestId);
   if (saldos.length === 0) {
-    await bot.sendMessage(chatId, '✅ Ninguém te deve nada no momento.');
+    await bot.sendMessage(chatId, `✅ Ninguém te deve nada no momento.\n\n${RODAPE_UX}`);
     return;
   }
   const linhas = saldos.map((s) => `👤 ${s.nome}: R$ ${formatarReal(s.valor)}`);
-  await bot.sendMessage(chatId, ['💰 *Quem te deve:*', '', ...linhas].join('\n'), { parse_mode: 'Markdown' });
+  await bot.sendMessage(chatId, ['💰 *Quem te deve:*', '', ...linhas, '', RODAPE_UX].join('\n'), {
+    parse_mode: 'Markdown',
+  });
 }

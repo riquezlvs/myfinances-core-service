@@ -30,14 +30,34 @@ export interface LinhaGastoExport {
   is_recurring: boolean;
 }
 
-/** Exporta os gastos do mês atual em CSV. */
+/**
+ * Exporta os gastos de um mês em CSV.
+ * @param mesAno Opcional, 'YYYY-MM' (rota de linguagem natural). Sem o
+ *               parâmetro, exporta o mês atual (comando /exportar). A janela
+ *               válida é verificada ANTES (mesAnoNaJanela) no handler; aqui
+ *               o formato é revalidado por segurança.
+ */
 export async function exportarGastosDoMesCSV(
-  requestId: string
+  requestId: string,
+  mesAno?: string
 ): Promise<{ nome: string; buffer: Buffer; linhas: number }> {
-  return withTiming('exportar gastos do mês em CSV', { requestId }, async () => {
-    const hoje = new Date();
-    const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString();
-    const primeiroDiaProxMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 1).toISOString();
+  return withTiming('exportar gastos do mês em CSV', { requestId, mesAno }, async () => {
+    let ano: number;
+    let mes: number; // 1-12
+
+    if (mesAno !== undefined) {
+      const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(mesAno);
+      if (!match) throw new Error(`Mês inválido para exportação: ${mesAno}`);
+      ano = Number(match[1]);
+      mes = Number(match[2]);
+    } else {
+      const hoje = new Date();
+      ano = hoje.getFullYear();
+      mes = hoje.getMonth() + 1;
+    }
+
+    const primeiroDia = new Date(ano, mes - 1, 1).toISOString();
+    const primeiroDiaProxMes = new Date(ano, mes, 1).toISOString();
 
     const { data, error } = await getSupabaseClient()
       .from('transactions')
@@ -66,10 +86,9 @@ export async function exportarGastosDoMesCSV(
       linhas
     );
 
-    const mes = String(hoje.getMonth() + 1).padStart(2, '0');
-    const ano = hoje.getFullYear();
+    const mesFormatado = String(mes).padStart(2, '0');
     return {
-      nome: `gastos-${ano}-${mes}.csv`,
+      nome: `gastos-${ano}-${mesFormatado}.csv`,
       buffer: Buffer.from('\uFEFF' + csv, 'utf8'), // BOM para Excel abrir acentos corretamente
       linhas: linhas.length,
     };

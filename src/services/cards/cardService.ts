@@ -1,5 +1,6 @@
 import { getSupabaseClient } from '../../clients/supabaseClient';
 import { withTiming, log } from '../../utils/logger';
+import type { CardType } from '../../types/transaction';
 
 /**
  * Fase 6 — Multi-cartão com data de fechamento personalizada.
@@ -11,6 +12,10 @@ export interface Cartao {
   id: string;
   name: string;
   closing_day: number;
+  /** 8.2 — Tipo do cartão (crédito, vale-refeição, vale-alimentação). */
+  card_type: CardType;
+  /** 8.2 — Cartão principal do seu tipo (usado pela inferência de pagamento). */
+  is_default: boolean;
 }
 
 export interface PeriodoFatura {
@@ -47,34 +52,121 @@ export function calcularPeriodoFatura(closingDay: number, agora = new Date()): P
   };
 }
 
-/** Lista os cartões cadastrados (ordenados por dia de fechamento). */
+/** Lista os cartões cadastrados (principal de cada tipo primeiro). */
 export async function listarCartoes(requestId: string): Promise<Cartao[]> {
   return withTiming('listar cartões', { requestId }, async () => {
     const { data, error } = await getSupabaseClient()
       .from('cards')
-      .select('id, name, closing_day')
+      .select('id, name, closing_day, card_type, is_default')
+      .order('is_default', { ascending: false })
       .order('closing_day', { ascending: true });
 
     if (error) throw new Error(`Erro ao listar cartões: ${error.message}`);
-    return (data ?? []) as Cartao[];
+    return (data ?? []) as unknown as Cartao[];
   });
 }
 
-/** Cria ou atualiza um cartão pelo nome (upsert). */
+/** Rótulo legível do tipo de cartão (8.2). */
+export const LABEL_CARD_TYPE: Record<CardType, string> = {
+  credit: 'Crédito',
+  meal_voucher: 'Vale-refeição',
+  food_voucher: 'Vale-alimentação',
+};
+
+/**
+ * 8.2 — Retorna o cartão PRINCIPAL do tipo pedido (is_default), com fallback
+ * para o primeiro do tipo (ordenado por fechamento). null se não houver.
+ * Consulta frequente da inferência de pagamento — sempre 1 linha.
+ */
+export async function obterCartaoPrincipal(
+  tipo: CardType,
+  requestId: string
+): Promise<Cartao | null> {
+  const { data, error } = await getSupabaseClient()
+    .from('cards')
+    .select('id, name, closing_day, card_type, is_default')
+    .eq('card_type', tipo)
+    .order('is_default', { ascending: false })
+    .order('closing_day', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new Error(`Erro ao buscar cartão principal: ${error.message}`);
+  return (data as unknown as Cartao) ?? null;
+}
+
+/** Cria ou atualiza um cartão pelo nome (upsert), com tipo (8.2). */
 export async function definirCartao(
   nome: string,
   closingDay: number,
-  requestId: string
+  requestId: string,
+  cardType: CardType = 'credit'
 ): Promise<Cartao> {
-  return withTiming('definir cartão', { requestId, nome, closingDay }, async () => {
+  return withTiming('definir cartão', { requestId, nome, closingDay, cardType }, async () => {
     const { data, error } = await getSupabaseClient()
       .from('cards')
-      .upsert({ name: nome, closing_day: closingDay }, { onConflict: 'name' })
-      .select('id, name, closing_day')
+      .upsert(
+        { name: nome, closing_day: closingDay, card_type: cardType },
+        { onConflict: 'name' }
+      )
+      .select('id, name, closing_day, card_type, is_default')
       .single();
 
     if (error) throw new Error(`Erro ao salvar cartão: ${error.message}`);
-    return data as unknown as Cartao;
+    const cartao = data as unknown as Cartao;
+
+    // Primeiro cartão do tipo se torna o principal automaticamente.
+    if (!cartao.is_default) {
+      const principal = await obterCartaoPrincipal(cartao.card_type, requestId);
+      if (!principal) {
+        const { error: errDefault } = await getSupabaseClient()
+          .from('cards')
+          .update({ is_default: true })
+          .eq('id', cartao.id);
+        if (errDefault) throw new Error(`Erro ao definir cartão principal: ${errDefault.message}`);
+        cartao.is_default = true;
+      }
+    }
+    return cartao;
+  });
+}
+
+/**
+ * 8.2 — Define o cartão principal do SEU tipo: zera os demais do mesmo tipo
+ * e marca o alvo. Duas queries (sem transação) são aceitáveis no escopo
+ * single-tenant; a constraint única parcial impede dois defaults do tipo.
+ */
+export async function definirCartaoPrincipal(id: string, requestId: string): Promise<Cartao> {
+  return withTiming('definir cartão principal', { requestId, cardId: id }, async () => {
+    const supabase = getSupabaseClient();
+    const { data: alvo, error: errAlvo } = await supabase
+      .from('cards')
+      .select('id, name, closing_day, card_type, is_default')
+      .eq('id', id)
+      .maybeSingle();
+    if (errAlvo) throw new Error(`Erro ao buscar cartão: ${errAlvo.message}`);
+    if (!alvo) throw new Error('Cartão não encontrado.');
+
+    const { error: errZerar } = await supabase
+      .from('cards')
+      .update({ is_default: false })
+      .eq('card_type', (alvo as any).card_type as CardType);
+    if (errZerar) throw new Error(`Erro ao zerar principais: ${errZerar.message}`);
+
+    const { data: atualizado, error: errSet } = await supabase
+      .from('cards')
+      .update({ is_default: true })
+      .eq('id', id)
+      .select('id, name, closing_day, card_type, is_default')
+      .single();
+    if (errSet) throw new Error(`Erro ao definir principal: ${errSet.message}`);
+
+    log('info', 'Cartão principal definido', {
+      requestId,
+      nome: (atualizado as any).name,
+      tipo: (alvo as any).card_type,
+    });
+    return atualizado as unknown as Cartao;
   });
 }
 

@@ -7,6 +7,7 @@ import { callbackQueryHandler } from './handlers/callbackQueryHandler';
 import { setupCommands } from './setupCommands';
 import { iniciarCronRecorrencias } from '../services/recurring/recurringService';
 import { iniciarCronLembreteMensal } from '../services/recurring/proactiveService';
+import { mensagemDuplicada } from '../utils/dedupe';
 
 /**
  * Monta o bot: registra todos os listeners, configura o menu nativo e
@@ -17,6 +18,13 @@ export async function iniciarBot(): Promise<{ shutdown: () => Promise<void> }> {
   const bot = getTelegramBot();
 
   bot.on('message', (msg) => {
+    // Fase 8: dedupe FIFO — reentregas do Telegram não podem disparar duas
+    // chamadas ao Gemini nem dois lançamentos no Supabase. Chave baseada em
+    // metadados da mensagem (chatId + message_id), nunca em conteúdo/IA.
+    const chave =
+      msg.chat?.id != null && msg.message_id != null ? `${msg.chat.id}:${msg.message_id}` : undefined;
+    if (mensagemDuplicada(chave)) return;
+
     // Fase 4: voz e áudio vão para o voiceHandler (transcrição multimodal
     // via Gemini); o messageHandler cuida de texto e do caso "sem texto".
     if (msg.voice || msg.audio) {

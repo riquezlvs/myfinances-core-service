@@ -4,6 +4,7 @@ import { getSupabaseClient } from '../../clients/supabaseClient';
 import { log } from '../../utils/logger';
 import { formatarReal } from '../../utils/formatters';
 import { getCategoryMap } from '../../services/categories/categoryCache';
+import { RODAPE_UX } from '../../config/constants';
 
 const NOME_METODO: Record<string, string> = {
   pix: 'Pix',
@@ -46,7 +47,8 @@ export async function handleRecorrenteListar(
   if (rows.length === 0) {
     await bot.sendMessage(
       chatId,
-      '📭 Nenhuma despesa recorrente cadastrada.\n\nUse `/recorrente add <descrição> <valor> <dia> [categoria]` para criar uma.'
+      '📭 Nenhuma despesa recorrente cadastrada.\n\nUse `/recorrente add <descrição> <valor> <dia> [categoria]` para criar uma.\n\n' +
+        RODAPE_UX
     );
     return;
   }
@@ -64,7 +66,7 @@ export async function handleRecorrenteListar(
 
   await bot.sendMessage(
     chatId,
-    ['🔁 *Despesas recorrentes:*', '', ...linhas, '', 'Use `/recorrente remover <id>` para desativar.'].join('\n'),
+    ['🔁 *Despesas recorrentes:*', '', ...linhas, '', 'Use `/recorrente remover <id>` para desativar.', '', RODAPE_UX].join('\n'),
     { parse_mode: 'Markdown' }
   );
 }
@@ -155,7 +157,7 @@ export async function handleRecorrenteAdd(
 
   await bot.sendMessage(
     chatId,
-    `✅ Recorrência adicionada!\n\n📝 ${descricao}\n💰 R$ ${formatarReal(valor)}\n📅 Dia ${dia}\n🏷️ ${categoriaNome}`
+    `✅ Recorrência adicionada!\n\n📝 ${descricao}\n💰 R$ ${formatarReal(valor)}\n📅 Dia ${dia}\n🏷️ ${categoriaNome}\n\n${RODAPE_UX}`
   );
 }
 
@@ -184,5 +186,5 @@ export async function handleRecorrenteRemover(
     return;
   }
 
-  await bot.sendMessage(chatId, `⏸️ Recorrência "${data.description}" desativada.`);
+  await bot.sendMessage(chatId, `⏸️ Recorrência "${data.description}" desativada.\n\n${RODAPE_UX}`);
 }

@@ -8,6 +8,7 @@ import {
   removerMeta,
   type StatusMeta,
 } from '../../services/budgets/budgetService';
+import { RODAPE_UX } from '../../config/constants';
 
 const ICONE_NIVEL: Record<StatusMeta['nivel'], string> = {
   ok: '🟢',
@@ -26,7 +27,8 @@ export async function handleMetaListar(
   if (metas.length === 0) {
     await bot.sendMessage(
       chatId,
-      '📭 Nenhuma meta definida.\n\nUse `/meta <categoria> <limite>` para criar (ex: `/meta alimentacao 600`).'
+      '📭 Nenhuma meta definida.\n\nUse `/meta <categoria> <limite>` para criar (ex: `/meta alimentacao 600`).\n\n' +
+        RODAPE_UX
     );
     return;
   }
@@ -40,7 +42,7 @@ export async function handleMetaListar(
 
   await bot.sendMessage(
     chatId,
-    ['🎯 *Metas do mês:*', '', ...linhas, '', 'Remova com `/meta remover <categoria>`.'].join('\n'),
+    ['🎯 *Metas do mês:*', '', ...linhas, '', 'Remova com `/meta remover <categoria>`.', '', RODAPE_UX].join('\n'),
     { parse_mode: 'Markdown' }
   );
 }
@@ -75,7 +77,7 @@ export async function handleMeta(
         await bot.sendMessage(chatId, `❓ Não encontrei a categoria "${nome}".`);
         return;
       }
-      await bot.sendMessage(chatId, `🗑️ Meta de "${removida}" removida.`);
+      await bot.sendMessage(chatId, `🗑️ Meta de "${removida}" removida.\n\n${RODAPE_UX}`);
     } catch (err) {
       log('error', 'Erro ao remover meta', { requestId, erro: err instanceof Error ? err.message : String(err) });
       await bot.sendMessage(chatId, '❌ Não consegui remover a meta. Tente novamente.');
@@ -106,7 +108,7 @@ export async function handleMeta(
     await bot.sendMessage(
       chatId,
       `✅ Meta definida!\n\n🏷️ ${resultado.categoria}\n🎯 Limite mensal: R$ ${formatarReal(resultado.limite)}\n\n` +
-        'Vou te avisar quando passar de 80% ou estourar o limite.'
+        `Vou te avisar quando passar de 80% ou estourar o limite.\n\n${RODAPE_UX}`
     );
   } catch (err) {
     log('error', 'Erro ao definir meta', { requestId, erro: err instanceof Error ? err.message : String(err) });

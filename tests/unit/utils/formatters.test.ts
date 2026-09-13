@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { formatarReal, formatarDataCurta, formatarPagamento } from '../../../src/utils/formatters';
+import { RODAPE_UX } from '../../../src/config/constants';
 import type { ResultadoPagamento } from '../../../src/types/transaction';
 
 describe('formatarReal', () => {
@@ -35,22 +36,24 @@ describe('formatarDataCurta', () => {
 });
 
 describe('formatarPagamento', () => {
+  const rodape = `\n\n${RODAPE_UX}`;
+
   it('deve formatar pessoa não encontrada', () => {
     const resultado: ResultadoPagamento = { status: 'pessoa_nao_encontrada', nome: 'João' };
     expect(formatarPagamento(resultado)).toBe(
-      '❓ Não encontrei ninguém chamado "João" nos seus registros.'
+      '❓ Não encontrei ninguém chamado "João" nos seus registros.' + rodape
     );
   });
 
   it('deve formatar sem dívida', () => {
     const resultado: ResultadoPagamento = { status: 'sem_divida', nome: 'Maria' };
-    expect(formatarPagamento(resultado)).toBe('✅ Maria já não tem nenhuma dívida em aberto.');
+    expect(formatarPagamento(resultado)).toBe('✅ Maria já não tem nenhuma dívida em aberto.' + rodape);
   });
 
   it('deve formatar quitado', () => {
     const resultado: ResultadoPagamento = { status: 'quitado', nome: 'Irmã', valorPago: 25.5 };
     expect(formatarPagamento(resultado)).toBe(
-      '✅ Quitado! Irmã pagou R$ 25,50 e não deve mais nada.'
+      '✅ Quitado! Irmã pagou R$ 25,50 e não deve mais nada.' + rodape
     );
   });
 
@@ -62,7 +65,7 @@ describe('formatarPagamento', () => {
       avisoValorAjustado: 'Valor ajustado.',
     };
     expect(formatarPagamento(resultado)).toBe(
-      '✅ Quitado! Irmã pagou R$ 25,50 e não deve mais nada.\n⚠️ Valor ajustado.'
+      '✅ Quitado! Irmã pagou R$ 25,50 e não deve mais nada.\n⚠️ Valor ajustado.' + rodape
     );
   });
 
@@ -74,7 +77,7 @@ describe('formatarPagamento', () => {
       saldoRestante: 15.5,
     };
     expect(formatarPagamento(resultado)).toBe(
-      '✅ Pagamento parcial registrado! Irmã pagou R$ 10,00. Saldo restante: R$ 15,50.'
+      '✅ Pagamento parcial registrado! Irmã pagou R$ 10,00. Saldo restante: R$ 15,50.' + rodape
     );
   });
 
@@ -87,7 +90,8 @@ describe('formatarPagamento', () => {
       avisoValorAjustado: 'Somente o devido foi registrado.',
     };
     expect(formatarPagamento(resultado)).toBe(
-      '✅ Pagamento parcial registrado! Irmã pagou R$ 10,00. Saldo restante: R$ 15,50.\n⚠️ Somente o devido foi registrado.'
+      '✅ Pagamento parcial registrado! Irmã pagou R$ 10,00. Saldo restante: R$ 15,50.\n⚠️ Somente o devido foi registrado.' +
+        rodape
     );
   });
 });
