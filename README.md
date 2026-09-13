@@ -118,23 +118,44 @@ npm run typecheck
 
 | Comando | Descrição |
 |---|---|
-| `/start` | Introdução e lista de comandos |
+| `/start` | Introdução e lista completa de comandos |
 | `/resumo` | Resumo do mês atual |
 | `/fatura` | Fatura do cartão de crédito |
 | `/dividas` | Quem te deve |
-| `/gastos` | Últimos lançamentos |
-| `/pago` | Registrar pagamento recebido |
+| `/gastos [n]` | Últimos n lançamentos |
+| `/pago <nome> [valor]` | Registrar pagamento recebido |
 | `/desfazer` | Desfazer último gasto |
 | `/apagar <id>` | Apagar lançamento específico |
 | `/recorrente` | Despesas fixas mensais |
-| `/exportar [mês]` | Exportar CSV |
+| `/exportar [gastos\|dividas] [mês]` | Exportar CSV |
 | `/grafico` | Gráfico de gastos |
 | `/insight` | Análise IA do mês |
-| `/meta` | Metas de orçamento |
+| `/meta <categoria> <limite>` | Metas de orçamento |
 | `/cartao` | Gerenciar cartões |
+| `/cartao add <nome> <dia> [credito\|vr\|va]` | Adicionar cartão/vale |
+| `/cartao principal <nome>` | Definir como principal |
+| `/cartao fatura <nome>` | Ver fatura do período |
+| `/cartao remover <nome>` | Remover cartão/vale |
 | `/poupanca` | Metas de poupança |
-| `/viagem` | Modo viagem (USD/EUR) |
+| `/poupanca definir <nome> <valor> [mês]` | Criar meta de poupança |
+| `/poupanca add <nome> <valor>` | Adicionar aporte |
+| `/viagem` | Ver cotações (USD/EUR) |
+| `/viagem registrar <valor> <moeda>` | Converter para BRL |
 | `/status` | Status do serviço |
+
+### Tipos de cartão
+
+| Atalho | Tipo |
+|---|---|
+| `credit` ou `credito` | Cartão de crédito (fatura) |
+| `vr` ou `refeicao` | Vale-refeição |
+| `va` ou `alimentacao` | Vale-alimentação |
+
+**Exemplo:**
+```bash
+/cartao add Santander 1 credito
+/cartao add Ticket 15 vr
+```
 
 ---
 

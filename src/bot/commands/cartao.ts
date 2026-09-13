@@ -39,7 +39,9 @@ function parseTipo(token: string | undefined): CardType {
   if (!token) return 'credit';
   const tipo = ALIASES_TIPO[token.toLowerCase()];
   if (!tipo) {
-    throw new Error(`Tipo desconhecido: ${token}`);
+    throw new Error(
+      `Tipo "${token}" não reconhecido. Use: credito (credit), vr (refeicao) ou va (alimentacao).\n\nEx: /cartao add Santander 1 credito`
+    );
   }
   return tipo;
 }
@@ -86,7 +88,10 @@ export async function handleCartao(
       requestId,
       erro: err instanceof Error ? err.message : String(err),
     });
-    await bot.sendMessage(chatId, '❌ Não consegui processar o comando. Tente novamente.');
+    await bot.sendMessage(
+      chatId,
+      `❌ ${err instanceof Error ? err.message : 'Não consegui processar o comando. Tente novamente.'}`
+    );
   }
 }
 
