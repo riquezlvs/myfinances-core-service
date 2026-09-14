@@ -5,15 +5,22 @@ import { getTelegramBot } from '../../clients/telegramClient';
 import { withTiming, log } from '../../utils/logger';
 import { AUTHORIZED_USER_ID } from '../../config/env';
 import { getCategoryMap } from '../../services/categories/categoryCache';
+import { listarCartoes } from '../../services/cards/cardService';
 import {
   apagarTransacaoComGrupo,
+  apagarTransacoesPorIds,
   atualizarCategoria,
+  atualizarCategoriaEmLote,
+  atualizarCartaoEmLote,
   atualizarMetodo,
 } from '../../services/transactions/transactionService';
 import {
   buildSuccessKeyboard,
   buildCategoryKeyboard,
   buildMethodKeyboard,
+  buildExtratoKeyboard,
+  buildCategoryBatchKeyboard,
+  buildCardBatchKeyboard,
   metodoCurtoParaCompleto,
 } from '../keyboards/transactionKeyboard';
 import { formatarMetodo } from '../../utils/formatters';
@@ -60,6 +67,12 @@ export async function callbackQueryHandler(
 
   try {
     const [acao, idStr, extra] = data.split(':');
+    // Ações de lote de extrato: catl, crdl, undl, setcl, setcrdl, backl
+    if (['catl', 'crdl', 'undl', 'setcl', 'setcrdl', 'backl'].includes(acao)) {
+      await manipularAcoesLoteExtrato(query, bot, chatId, messageId, data, requestId);
+      return;
+    }
+
     const displayId = Number(idStr);
 
     if (!Number.isFinite(displayId)) {
@@ -76,18 +89,6 @@ export async function callbackQueryHandler(
         await bot.answerCallbackQuery(query.id, {
           text: resultado.displayIds.length > 1 ? '✅ Compra parcelada desfeita.' : '✅ Gasto desfeito.',
         });
-        break;
-      }
-
-      case 'undl': {
-        // Desfaz importação em lote
-        const ids = idStr.includes(',') ? idStr.split(',').map(Number) : [displayId];
-        await withTiming('callback: desfazer lote extrato', { requestId, count: ids.length }, async () => {
-          const { apagarTransacoesPorIds } = await import('../../services/transactions/transactionService');
-          await apagarTransacoesPorIds(ids, requestId);
-        });
-        await bot.deleteMessage(chatId, messageId);
-        await bot.answerCallbackQuery(query.id, { text: '✅ Importação do extrato desfeita com sucesso.' });
         break;
       }
 
@@ -209,4 +210,120 @@ async function manipularNavegacao(
 
   log('info', 'Callback: navegação rápida executada', { requestId, destino });
   await bot.answerCallbackQuery(query.id, { text: '✅ Pronto!' });
+}
+
+/**
+ * Resolve displayIds a partir do sufixo do callback de lote.
+ * Suporta lista separada por vírgula ("10,11,12") ou prefixo com tamanho ("10:3").
+ */
+function extrairDisplayIdsDeLote(sufixo: string): number[] {
+  if (sufixo.includes(',')) {
+    return sufixo.split(',').map(Number).filter(Number.isFinite);
+  }
+  if (sufixo.includes(':')) {
+    const [inicial, qtd] = sufixo.split(':').map(Number);
+    if (Number.isFinite(inicial) && Number.isFinite(qtd)) {
+      return Array.from({ length: qtd }, (_, i) => inicial + i);
+    }
+  }
+  const idUnico = Number(sufixo);
+  return Number.isFinite(idUnico) ? [idUnico] : [];
+}
+
+/**
+ * Trata ações de edição/cancelamento em lote disparadas pela importação de extrato.
+ */
+async function manipularAcoesLoteExtrato(
+  query: CallbackQuery,
+  bot: TelegramBot,
+  chatId: number,
+  messageId: number,
+  data: string,
+  requestId: string
+): Promise<void> {
+  const partes = data.split(':');
+  const acao = partes[0]!;
+
+  switch (acao) {
+    case 'undl': {
+      const sufixo = partes.slice(1).join(':');
+      const ids = extrairDisplayIdsDeLote(sufixo);
+      await withTiming('callback: desfazer lote extrato', { requestId, count: ids.length }, async () => {
+        await apagarTransacoesPorIds(ids, requestId);
+      });
+      await bot.deleteMessage(chatId, messageId);
+      await bot.answerCallbackQuery(query.id, { text: '✅ Importação do extrato desfeita com sucesso.' });
+      break;
+    }
+
+    case 'catl': {
+      const sufixo = partes.slice(1).join(':');
+      const categoryMap = await getCategoryMap(requestId);
+      await bot.editMessageReplyMarkup(buildCategoryBatchKeyboard(sufixo, categoryMap), {
+        chat_id: chatId,
+        message_id: messageId,
+      });
+      await bot.answerCallbackQuery(query.id);
+      break;
+    }
+
+    case 'crdl': {
+      const sufixo = partes.slice(1).join(':');
+      const cartoes = await listarCartoes(requestId).catch(() => []);
+      await bot.editMessageReplyMarkup(buildCardBatchKeyboard(sufixo, cartoes), {
+        chat_id: chatId,
+        message_id: messageId,
+      });
+      await bot.answerCallbackQuery(query.id);
+      break;
+    }
+
+    case 'setcl': {
+      const categoryId = Number(partes[1]);
+      const sufixo = partes.slice(2).join(':');
+      const ids = extrairDisplayIdsDeLote(sufixo);
+      const categoryMap = await getCategoryMap(requestId);
+      const nomeCategoria = categoryMap[categoryId] ?? 'desconhecida';
+
+      await atualizarCategoriaEmLote(ids, categoryId, requestId);
+      await bot.editMessageReplyMarkup(buildExtratoKeyboard(ids), {
+        chat_id: chatId,
+        message_id: messageId,
+      });
+      await bot.answerCallbackQuery(query.id, {
+        text: `🏷️ Categoria de ${ids.length} lançamentos alterada para: ${nomeCategoria}`,
+      });
+      break;
+    }
+
+    case 'setcrdl': {
+      const cardId = partes[1]!;
+      const sufixo = partes.slice(2).join(':');
+      const ids = extrairDisplayIdsDeLote(sufixo);
+      const cartoes = await listarCartoes(requestId).catch(() => []);
+      const cartao = cartoes.find((c) => c.id === cardId);
+      const nomeCartao = cartao?.name ?? 'Cartão';
+
+      await atualizarCartaoEmLote(ids, cardId, requestId);
+      await bot.editMessageReplyMarkup(buildExtratoKeyboard(ids), {
+        chat_id: chatId,
+        message_id: messageId,
+      });
+      await bot.answerCallbackQuery(query.id, {
+        text: `💳 Cartão de ${ids.length} lançamentos alterado para: ${nomeCartao}`,
+      });
+      break;
+    }
+
+    case 'backl': {
+      const sufixo = partes.slice(1).join(':');
+      const ids = extrairDisplayIdsDeLote(sufixo);
+      await bot.editMessageReplyMarkup(buildExtratoKeyboard(ids), {
+        chat_id: chatId,
+        message_id: messageId,
+      });
+      await bot.answerCallbackQuery(query.id);
+      break;
+    }
+  }
 }

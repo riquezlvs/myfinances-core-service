@@ -131,15 +131,52 @@ export function buildViagemKeyboard(): InlineKeyboardMarkup {
   };
 }
 
-/** Teclado de confirmação de importação de extrato em lote com botão de desfazer tudo. */
+/** Teclado de confirmação de importação de extrato em lote com botões de ação rápida. */
 export function buildExtratoKeyboard(displayIds: number[]): InlineKeyboardMarkup {
-  // Se forem muitos IDs, enviamos os primeiros ou identificador do lote para respeitar limite de 64 bytes
   const idStr = displayIds.join(',');
-  const callbackData = idStr.length <= 50 ? `undl:${idStr}` : `undl:${displayIds[0]}:${displayIds.length}`;
+  const callbackSuffix = idStr.length <= 48 ? idStr : `${displayIds[0]}:${displayIds.length}`;
   return {
     inline_keyboard: [
-      [{ text: '❌ Desfazer Importação', callback_data: callbackData }],
+      [
+        { text: '✏️ Mudar Categoria', callback_data: `catl:${callbackSuffix}` },
+        { text: '💳 Alterar Cartão', callback_data: `crdl:${callbackSuffix}` },
+      ],
+      [{ text: '❌ Desfazer Importação', callback_data: `undl:${callbackSuffix}` }],
       [{ ...BOTON_FATURAS }, { ...BOTON_RESUMO }],
     ],
   };
+}
+
+/** Teclado para escolher categoria para o lote de extrato. */
+export function buildCategoryBatchKeyboard(
+  callbackSuffix: string,
+  categoryMap: Record<number, string>
+): InlineKeyboardMarkup {
+  const entradas = Object.entries(categoryMap);
+  const linhas: { text: string; callback_data: string }[][] = [];
+
+  for (let i = 0; i < entradas.length; i += 2) {
+    linhas.push(
+      entradas.slice(i, i + 2).map(([id, nome]) => ({
+        text: nome,
+        callback_data: `setcl:${id}:${callbackSuffix}`,
+      }))
+    );
+  }
+
+  linhas.push([{ text: '↩️ Voltar', callback_data: `backl:${callbackSuffix}` }]);
+  return { inline_keyboard: linhas };
+}
+
+/** Teclado para escolher cartão para o lote de extrato. */
+export function buildCardBatchKeyboard(
+  callbackSuffix: string,
+  cartoes: Array<{ id: string; name: string }>
+): InlineKeyboardMarkup {
+  const linhas: { text: string; callback_data: string }[][] = cartoes.map((c) => [
+    { text: `💳 ${c.name}`, callback_data: `setcrdl:${c.id}:${callbackSuffix}` },
+  ]);
+
+  linhas.push([{ text: '↩️ Voltar', callback_data: `backl:${callbackSuffix}` }]);
+  return { inline_keyboard: linhas };
 }

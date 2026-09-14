@@ -17,11 +17,12 @@ import { validarExtrato, type StatementValidado } from './guards/statementGuard'
 export async function interpretarExtrato(
   buffer: Buffer,
   mimeType: string,
-  requestId: string
+  requestId: string,
+  comentarioUsuario?: string
 ): Promise<StatementValidado> {
   return withTiming(
     'chamada ao Gemini (extrato multimodal)',
-    { requestId, modelo: GEMINI_MODEL, bytes: buffer.length, mimeType },
+    { requestId, modelo: GEMINI_MODEL, bytes: buffer.length, mimeType, temComentario: !!comentarioUsuario },
     async () => {
       const [categoryMap, cartoes] = await Promise.all([
         getCategoryMap(requestId),
@@ -36,7 +37,7 @@ export async function interpretarExtrato(
           contents: {
             role: 'user',
             parts: [
-              { text: buildStatementPrompt(agoraISO, nomesCartoes) },
+              { text: buildStatementPrompt(agoraISO, nomesCartoes, comentarioUsuario) },
               { inlineData: { mimeType, data: buffer.toString('base64') } },
             ],
           },

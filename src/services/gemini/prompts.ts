@@ -137,14 +137,23 @@ export function buildInsightPrompt(agregados: string): string {
 /**
  * Prompt para leitura e extração de faturas/extratos bancários via visão multimodal.
  */
-export function buildStatementPrompt(agoraISO: string, nomesCartoesCadastrados: string[]): string {
+export function buildStatementPrompt(
+  agoraISO: string,
+  nomesCartoesCadastrados: string[],
+  comentarioUsuario?: string
+): string {
   const listaCartoes = nomesCartoesCadastrados.length
     ? `Cartões cadastrados pelo usuário no sistema: ${nomesCartoesCadastrados.join(', ')}.`
     : 'Nenhum cartão cadastrado previamente.';
 
+  const contextoComentario = comentarioUsuario?.trim()
+    ? `Observação/título enviado pelo usuário junto à foto: "${comentarioUsuario.trim()}". Considere isso caso indique um cartão específico (ex: "fatura nubank", "itau") ou contexto da despesa.`
+    : '';
+
   return [
     `Data e hora atuais de referência: ${agoraISO} (timezone America/Sao_Paulo).`,
     listaCartoes,
+    contextoComentario,
     '',
     'Analise a imagem da fatura ou extrato bancário fornecida e extraia:',
     '1) "card_name_hint": Qual a instituição financeira ou cartão da imagem (ex: "Nubank", "Itaú", "XP", "C6", "Inter", etc.), associando aos cartões cadastrados se compatível.',

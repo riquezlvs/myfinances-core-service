@@ -73,10 +73,13 @@ export async function photoHandler(
     }
     const buffer = Buffer.from(await response.arrayBuffer());
 
+    // Captura legenda/comentário enviado junto com a imagem (ex: "Fatura Viagem Rio", "Nubank Setembro")
+    const legenda = msg.caption?.trim() || undefined;
+
     await bot.sendMessage(chatId, '🔍 Analisando extrato/fatura... Aguarde um instante.');
 
     // 3) Leitura multimodal estruturada com Gemini 3.5 Flash
-    const extrato = await interpretarExtrato(buffer, 'image/jpeg', requestId);
+    const extrato = await interpretarExtrato(buffer, 'image/jpeg', requestId, legenda);
 
     if (!extrato.items.length) {
       await bot.sendMessage(
@@ -91,9 +94,13 @@ export async function photoHandler(
     const cartoes = await listarCartoes(requestId).catch(() => []);
     let cartaoEscolhido = cartoes.find((c) => c.card_type === 'credit' && c.is_default);
 
-    if (extrato.card_name_hint) {
-      const hint = extrato.card_name_hint.toLowerCase();
-      const match = cartoes.find((c) => c.name.toLowerCase().includes(hint) || hint.includes(c.name.toLowerCase()));
+    // Se a legenda ou hint indicar o cartão, prioriza correspondência
+    const textoParaBuscaCartao = `${legenda ?? ''} ${extrato.card_name_hint ?? ''}`.toLowerCase();
+    if (textoParaBuscaCartao.trim()) {
+      const match = cartoes.find((c) => {
+        const nomeC = c.name.toLowerCase();
+        return textoParaBuscaCartao.includes(nomeC) || (extrato.card_name_hint && nomeC.includes(extrato.card_name_hint.toLowerCase()));
+      });
       if (match) {
         cartaoEscolhido = match;
       }
@@ -113,14 +120,16 @@ export async function photoHandler(
     const resultadoLote = await registrarLoteExtrato({
       cardId: cartaoEscolhido?.id ?? null,
       itens: itensParaLote,
+      comentarioLote: legenda,
       requestId,
     });
 
     const totalRegistrado = resultadoLote.inseridos.reduce((soma, i) => soma + i.amount, 0);
     const cartaoLabel = cartaoEscolhido ? `💳 *Cartão:* ${cartaoEscolhido.name}` : '💳 *Método:* Cartão de crédito';
+    const tituloExtrato = legenda ? `📄 *Extrato processado — "${legenda}"*` : '📄 *Extrato processado com sucesso!*';
 
     const linhasMsg: string[] = [
-      '📄 *Extrato processado com sucesso!*',
+      tituloExtrato,
       '',
       cartaoLabel,
       `✅ *Lançamentos registrados:* ${resultadoLote.inseridos.length} (Total: R$ ${formatarReal(totalRegistrado)})`,

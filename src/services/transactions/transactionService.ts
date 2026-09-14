@@ -200,6 +200,38 @@ export async function atualizarCategoria(displayId: number, categoryId: number, 
   });
 }
 
+export async function atualizarCategoriaEmLote(
+  displayIds: number[],
+  categoryId: number,
+  requestId: string
+): Promise<void> {
+  if (!displayIds.length) return;
+  await withTiming('atualizar categoria em lote', { requestId, count: displayIds.length, categoryId }, async () => {
+    const { error } = await getSupabaseClient()
+      .from('transactions')
+      .update({ category_id: categoryId })
+      .in('display_id', displayIds);
+
+    if (error) throw new Error(`Erro ao atualizar categoria em lote: ${error.message}`);
+  });
+}
+
+export async function atualizarCartaoEmLote(
+  displayIds: number[],
+  cardId: string,
+  requestId: string
+): Promise<void> {
+  if (!displayIds.length) return;
+  await withTiming('atualizar cartão em lote', { requestId, count: displayIds.length, cardId }, async () => {
+    const { error } = await getSupabaseClient()
+      .from('transactions')
+      .update({ card_id: cardId, payment_method: 'credit_card' })
+      .in('display_id', displayIds);
+
+    if (error) throw new Error(`Erro ao atualizar cartão em lote: ${error.message}`);
+  });
+}
+
 export async function atualizarMetodo(displayId: number, metodo: PaymentMethod, requestId: string): Promise<void> {
   await withTiming('atualizar método de pagamento', { requestId, displayId, metodo }, async () => {
     // Troca manual de método invalida o cartão inferido na criação (8.2):
@@ -559,13 +591,15 @@ export interface ResultadoLoteExtrato {
 /**
  * Registra um lote de despesas extraídas de um extrato/fatura.
  * Executa detecção preventiva de duplicidades (mesmo valor, cartão e dia aproximado).
+ * Permite adicionar um comentário ou título geral ao lote (ex: "Fatura Viagem").
  */
 export async function registrarLoteExtrato(params: {
   cardId: string | null;
   itens: ItemLoteExtrato[];
+  comentarioLote?: string | null;
   requestId: string;
 }): Promise<ResultadoLoteExtrato> {
-  const { cardId, itens, requestId } = params;
+  const { cardId, itens, comentarioLote, requestId } = params;
   return withTiming('registrar lote de extrato', { requestId, totalItens: itens.length }, async () => {
     const supabase = getSupabaseClient();
     const inseridos: Array<{ displayId: number; description: string; amount: number }> = [];
@@ -606,6 +640,8 @@ export async function registrarLoteExtrato(params: {
       });
     };
 
+    const prefixoComentario = comentarioLote?.trim() ? `[${comentarioLote.trim()}] ` : '';
+
     for (const item of itens) {
       if (ehDuplicado(item)) {
         duplicados.push({
@@ -624,7 +660,7 @@ export async function registrarLoteExtrato(params: {
       const { data, error } = await supabase
         .from('transactions')
         .insert({
-          description: `${item.description}${sufixoParcela}`,
+          description: `${prefixoComentario}${item.description}${sufixoParcela}`,
           total_amount: item.amount,
           category_id: item.category_id,
           payment_method: 'credit_card',
@@ -632,7 +668,7 @@ export async function registrarLoteExtrato(params: {
           occurred_at: item.occurred_at,
           installment_number: item.installment_number ?? null,
           installment_total: item.installment_total ?? null,
-          raw_input: `[extrato: ${item.description}]`,
+          raw_input: `[extrato${prefixoComentario ? `: ${comentarioLote?.trim()}` : ''}: ${item.description}]`,
         })
         .select('display_id')
         .single();
