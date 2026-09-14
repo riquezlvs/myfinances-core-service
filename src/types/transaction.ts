@@ -123,6 +123,15 @@ export interface IntentPayload {
 export interface SaldoTerceiro {
   nome: string;
   valor: number;
+  total?: number;
+  totalMes?: number;
+  parcelas?: Array<{
+    displayId?: number;
+    valor: number;
+    numero?: number;
+    total?: number;
+    ocorreuEm?: string;
+  }>;
 }
 
 export type ResultadoPagamento =

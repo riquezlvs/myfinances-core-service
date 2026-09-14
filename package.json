@@ -11,7 +11,9 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "setup-bot": "tsx scripts/configure-bot.ts",
+    "avatar": "node scripts/gerar-avatar-bot.cjs"
   },
   "dependencies": {
     "@google/genai": "^1.52.0",

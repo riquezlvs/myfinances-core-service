@@ -49,6 +49,21 @@ function parseTipo(token: string | undefined): CardType {
 function emojiTipo(tipo: CardType): string {
   return tipo === 'credit' ? '💳' : tipo === 'meal_voucher' ? '🍽️' : '🛒';
 }
+
+/** Comandos do /cartão — usada na ajuda e nas mensagens de fallback. */
+const COMANDOS_CARTAO = [
+  '📋 *Comandos do /cartão:*',
+  '/cartao — listar cartões e vales',
+  '/cartao add <nome> [dia] [credito|vr|va] — adicionar/atualizar',
+  '/cartao principal <nome> — definir como principal',
+  '/cartao fatura <nome> — ver fatura do período',
+  '/cartao remover <nome> — remover cartão/vale',
+  '',
+  '💡 Exemplos:',
+  '/cartao add Santander 30 credito',
+  '/cartao add Ticket 15 vr',
+].join('\n');
+
 export async function handleCartao(
   chatId: number,
   argumentos: string,
@@ -59,7 +74,13 @@ export async function handleCartao(
   const sub = (partes[0] ?? '').toLowerCase();
 
   try {
-    if (!sub || sub === 'listar') {
+    if (!sub) {
+      // /cartao sem argumentos → ajuda rápida + lista de cartões.
+      await bot.sendMessage(chatId, COMANDOS_CARTAO, { parse_mode: 'Markdown' });
+      await listar(chatId, requestId, bot);
+      return;
+    }
+    if (sub === 'listar') {
       await listar(chatId, requestId, bot);
       return;
     }
@@ -79,10 +100,8 @@ export async function handleCartao(
       await principal(chatId, partes.slice(1).join(' '), requestId, bot);
       return;
     }
-    await bot.sendMessage(
-      chatId,
-      'Use assim:\n/cartao — listar\n/cartao add <nome> <dia fechamento> [credito|vr|va]\n/cartao principal <nome>\n/cartao remover <nome>\n/cartao fatura <nome>'
-    );
+    // Sub-comando não reconhecido → ajuda clara
+    await bot.sendMessage(chatId, COMANDOS_CARTAO, { parse_mode: 'Markdown' });
   } catch (err) {
     log('error', 'Erro no comando /cartao', {
       requestId,
@@ -100,7 +119,19 @@ async function listar(chatId: number, requestId: string, bot: TelegramBot): Prom
   if (cartoes.length === 0) {
     await bot.sendMessage(
       chatId,
-      `📭 Nenhum cartão ou vale cadastrado.\n\nUse \`/cartao add nubank 20\` ou \`/cartao add alelo 1 vr\`.\n\n${RODAPE_UX}`
+      [
+        '📭 Nenhum cartão ou vale cadastrado ainda.',
+        '',
+        'Adicione seu primeiro cartão ou vale:',
+        '💳 Crédito: `/cartao add Santander 30 credito`',
+        '🍽️ Vale-refeição: `/cartao add Alelo 1 vr`',
+        '🛒 Vale-alimentação: `/cartao add Sodexo 1 va`',
+        '',
+        '💡 O dia e o tipo são opcionais (padrão: dia=1, tipo=credito).',
+        '',
+        RODAPE_UX,
+      ].join('\n'),
+      { parse_mode: 'Markdown' }
     );
     return;
   }
@@ -124,40 +155,86 @@ async function listar(chatId: number, requestId: string, bot: TelegramBot): Prom
   });
 }
 
+/**
+ * Faz o parsing inteligente dos argumentos do /cartao add.
+ *
+ * Formatos aceitos (todos com defaults amigáveis):
+ *   /cartao add NOME              → nome, closing_day=1, tipo=credit
+ *   /cartao add NOME DIA          → nome, closing_day=DIA, tipo=credit
+ *   /cartao add NOME TIPO         → nome, closing_day=1, tipo=TIPO
+ *   /cartao add NOME DIA TIPO     → nome, closing_day=DIA, tipo=TIPO
+ */
+export function parseArgumentosAdd(partes: string[]): {
+  nome: string;
+  closing_day: number;
+  tipo: CardType;
+} {
+  if (partes.length === 0) {
+    throw new Error(
+      'Faltou o nome do cartão. Use: /cartao add <nome> [dia] [credito|vr|va]\n\nEx: /cartao add Santander 1 credito'
+    );
+  }
+
+  const ehTipo = (t: string): boolean => t.toLowerCase() in ALIASES_TIPO;
+  const ehNumero = (t: string): boolean => /^\d+$/.test(t);
+
+  if (partes.length === 1) {
+    return { nome: partes[0], closing_day: 1, tipo: 'credit' };
+  }
+
+  if (partes.length === 2) {
+    const [um, dois] = partes;
+    if (ehTipo(dois)) {
+      return { nome: um, closing_day: 1, tipo: ALIASES_TIPO[dois.toLowerCase()] };
+    }
+    if (ehNumero(dois)) {
+      return { nome: um, closing_day: Math.min(28, Math.max(1, Number(dois))), tipo: 'credit' };
+    }
+    throw new Error(
+      `Não entendi "${dois}". Use dia (número) ou tipo (credito|vr|va).\n\nEx: /cartao add ${um} 1 credito`
+    );
+  }
+
+  // 3+ argumentos: NOME(S) + DIA + TIPO
+  const ultimo = partes[partes.length - 1];
+  const penultimo = partes[partes.length - 2];
+  const nome = partes.slice(0, -2).join(' ');
+
+  if (ehTipo(ultimo) && ehNumero(penultimo)) {
+    return {
+      nome,
+      closing_day: Math.min(28, Math.max(1, Number(penultimo))),
+      tipo: ALIASES_TIPO[ultimo.toLowerCase()],
+    };
+  }
+
+  if (ehTipo(ultimo)) {
+    return {
+      nome: partes.slice(0, -1).join(' '),
+      closing_day: 1,
+      tipo: ALIASES_TIPO[ultimo.toLowerCase()],
+    };
+  }
+
+  throw new Error(
+    `Não entendi o comando. Use: /cartao add <nome> [dia] [credito|vr|va]\n\nEx: /cartao add Santander 1 credito`
+  );
+}
+
 async function adicionar(
   chatId: number,
   partes: string[],
   requestId: string,
   bot: TelegramBot
 ): Promise<void> {
-  const diaStr = partes[partes.length - 1];
-  let nome = partes.slice(0, -1).join(' ');
-  let tipo: CardType = 'credit';
-
-  // 8.2 — último token pode ser o tipo (vr/va/credito); o penúltimo é o dia.
-  const possivelTipo = parseTipo(partes[partes.length - 2] ?? undefined);
-  const ultimoEhDia = /^\d{1,2}$/.test(diaStr ?? '');
-  if (ultimoEhDia && partes.length >= 3 && typeof possivelTipo !== 'undefined') {
-    tipo = possivelTipo;
-    nome = partes.slice(0, -2).join(' ');
-  }
-  const diaFinal = partes[partes.length - (tipo === 'credit' && nome ? 2 : 1)] ?? diaStr;
-
-  if (!nome || !/^\d{1,2}$/.test(diaStr ?? '')) {
-    await bot.sendMessage(chatId, 'Use assim: /cartao add nubank 20  (ou: /cartao add alelo 1 vr)');
-    return;
-  }
-  const dia = parseInt(diaStr, 10);
-  if (dia < 1 || dia > 28) {
-    await bot.sendMessage(chatId, '❌ O dia de fechamento deve estar entre 1 e 28.');
-    return;
-  }
-
-  const cartao = await definirCartao(nome, dia, requestId, tipo);
-  const Principal = cartao.is_default ? '\n🏷️ Principal do tipo (usado automaticamente nos gastos).' : '';
+  const { nome, closing_day, tipo } = parseArgumentosAdd(partes);
+  const cartao = await definirCartao(nome, closing_day, requestId, tipo);
+  const principal = cartao.is_default
+    ? '\n🏷️ Principal do tipo (usado automaticamente nos gastos).'
+    : '';
   await bot.sendMessage(
     chatId,
-    `✅ ${emojiTipo(tipo)} ${LABEL_CARD_TYPE[tipo]} salvo!\n\n${emojiTipo(tipo)} ${cartao.name}\n📅 Dia de fechamento: ${cartao.closing_day}${Principal}\n\n${RODAPE_UX}`
+    `✅ ${emojiTipo(tipo)} ${LABEL_CARD_TYPE[tipo]} salvo!\n\n${emojiTipo(tipo)} ${cartao.name}\n📅 Dia de fechamento: ${cartao.closing_day}${principal}\n\n${RODAPE_UX}`
   );
 }
 

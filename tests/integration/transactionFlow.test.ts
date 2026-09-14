@@ -26,11 +26,25 @@ vi.mock('../../src/services/export/exportService', () => ({
   exportarGastosDoMesCSV: vi.fn(),
   exportarDividasCSV: vi.fn(),
 }));
+vi.mock('../../src/services/cards/cardService', () => ({
+  listarCartoes: vi.fn(),
+  definirCartao: vi.fn(),
+  definirCartaoPrincipal: vi.fn(),
+  removerCartao: vi.fn(),
+  calcularPeriodoFatura: vi.fn(),
+  getFaturaDoPeriodo: vi.fn(),
+  LABEL_CARD_TYPE: {
+    credit: 'Crédito',
+    meal_voucher: 'Vale-refeição',
+    food_voucher: 'Vale-alimentação',
+  },
+}));
 
 import { classificarIntencao } from '../../src/services/gemini/intentRouter';
 import { registrarTransacao, consultarGastosGranulares } from '../../src/services/transactions/transactionService';
 import { exportarGastosDoMesCSV } from '../../src/services/export/exportService';
 import { getCategoryMap } from '../../src/services/categories/categoryCache';
+import { definirCartao, listarCartoes, LABEL_CARD_TYPE } from '../../src/services/cards/cardService';
 import { RODAPE_UX } from '../../src/config/constants';
 
 const mockClassificarIntencao = vi.mocked(classificarIntencao);
@@ -38,6 +52,8 @@ const mockRegistrarTransacao = vi.mocked(registrarTransacao);
 const mockConsultarGastosGranulares = vi.mocked(consultarGastosGranulares);
 const mockExportarGastosDoMesCSV = vi.mocked(exportarGastosDoMesCSV);
 const mockGetCategoryMap = vi.mocked(getCategoryMap);
+const mockDefinirCartao = vi.mocked(definirCartao);
+const mockListarCartoes = vi.mocked(listarCartoes);
 
 function criarBotMock() {
   const bot = {
@@ -308,10 +324,113 @@ describe('messageHandler — roteamento de comandos diretos', () => {
     expect(mockClassificarIntencao).not.toHaveBeenCalled();
   });
 
-  it('deve responder que comando não reconhecido para "/xyz"', async () => {
+    it('deve responder que comando não reconhecido para "/xyz"', async () => {
     const bot = criarBotMock();
     await messageHandler(criarMensagem('/xyz'), bot);
 
     expect(bot.sendMessage).toHaveBeenCalledWith(999, '❓ Comando não reconhecido. Use /start para ver os comandos disponíveis.');
+  });
+
+  // ── /cartao add — cobertura do parseArgumentosAdd (Fase 6) ───────────────
+  describe('messageHandler — /cartao add (parse inteligente)', () => {
+    const mockCartaoBase = {
+      id: 'card-1',
+      name: 'Santander',
+      closing_day: 1,
+      card_type: 'credit' as const,
+      is_default: true,
+    };
+
+    /** Fábrica: mock define definirCartao retornando um cartão com os campos dados. */
+    function mockDefinirCartaoComo(nome: string, closingDay: number, tipo: 'credit' | 'meal_voucher' | 'food_voucher') {
+      mockDefinirCartao.mockResolvedValue({
+        id: 'card-xyz',
+        name: nome,
+        closing_day: closingDay,
+        card_type: tipo,
+        is_default: true,
+      });
+    }
+
+    it('deve criar cartão com defaults quando só o nome é informado', async () => {
+      mockDefinirCartaoComo('Santander', 1, 'credit');
+
+      const bot = criarBotMock();
+      await messageHandler(criarMensagem('/cartao add Santander'), bot);
+
+      // parse: nome="Santander", closing_day=1 (default), tipo=credit (default)
+      expect(mockDefinirCartao).toHaveBeenCalledWith('Santander', 1, expect.any(String), 'credit');
+      expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+      const texto = bot.sendMessage.mock.calls[0][1];
+      expect(texto).toContain('💳');
+      expect(texto).toContain('Crédito salvo');
+      expect(texto).toContain('Santander');
+      expect(texto).toContain('1');
+      expect(texto).not.toContain('Vale');
+    });
+
+        it('deve criar cartão com dia de fechamento personalizado', async () => {
+      mockDefinirCartaoComo('Santander', 20, 'credit');
+
+      const bot = criarBotMock();
+      await messageHandler(criarMensagem('/cartao add Santander 20'), bot);
+
+      expect(mockDefinirCartao).toHaveBeenCalledWith('Santander', 20, expect.any(String), 'credit');
+      expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+      const texto = bot.sendMessage.mock.calls[0][1];
+      expect(texto).toContain('📅 Dia de fechamento: 20'); // dia reflete no corpo da mensagem
+    });
+
+    it('deve criar cartão com dia e tipo (vr → meal_voucher)', async () => {
+      mockDefinirCartaoComo('Ticket', 15, 'meal_voucher');
+
+      const bot = criarBotMock();
+      await messageHandler(criarMensagem('/cartao add Ticket 15 vr'), bot);
+
+      expect(mockDefinirCartao).toHaveBeenCalledWith('Ticket', 15, expect.any(String), 'meal_voucher');
+      expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+      const texto = bot.sendMessage.mock.calls[0][1];
+      expect(texto).toContain('🍽️'); // emoji de meal_voucher
+      expect(texto).toContain('Vale-refeição salvo');
+      expect(texto).toContain('Ticket');
+      expect(texto).toContain('15');
+    });
+
+        it('deve responder com erro amigável quando o segundo token não é dia nem tipo', async () => {
+      const bot = criarBotMock();
+      await messageHandler(criarMensagem('/cartao add Santander abc'), bot);
+
+      // O parse falha antes de chegar ao serviço — definirCartao nunca é chamado
+      expect(mockDefinirCartao).not.toHaveBeenCalled();
+      expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+      const texto = bot.sendMessage.mock.calls[0][1];
+      expect(texto).toContain('❌');
+      expect(texto).toContain('Não entendi "abc"');
+      expect(texto).toContain('Ex: /cartao add Santander 1 credito');
+    });
+  });
+
+  describe('messageHandler — /cartao sozinho (mensagem de ajuda clara)', () => {
+    beforeEach(() => {
+      // Por padrão, nenhum cartão cadastrado
+      mockListarCartoes.mockResolvedValue([]);
+    });
+
+    it('deve exibir ajuda com todos os sub-comandos quando /cartao vem sem argumentos', async () => {
+      const bot = criarBotMock();
+      await messageHandler(criarMensagem('/cartao'), bot);
+
+      // Primeira mensagem: ajuda com os comandos
+      const textoAjuda = bot.sendMessage.mock.calls[0][1];
+      expect(textoAjuda).toContain('/cartao add');
+      expect(textoAjuda).toContain('/cartao principal');
+      expect(textoAjuda).toContain('/cartao remover');
+      expect(textoAjuda).toContain('/cartao fatura');
+      expect(textoAjuda).toContain('Exemplos');
+
+      // Segunda mensagem: lista vazia
+      const textoLista = bot.sendMessage.mock.calls[1][1];
+      expect(textoLista).toContain('Nenhum cartão ou vale cadastrado');
+    });
   });
 });

@@ -529,3 +529,15 @@ export async function getFaturaMensal(requestId: string): Promise<ItemFatura[]> 
     return data ?? [];
   });
 }
+
+export async function atualizarGastoPorId(
+  displayId: number,
+  patch: { total_amount?: number; description?: string; occurred_at?: string },
+  requestId: string
+): Promise<void> {
+  if (Object.keys(patch).length === 0) throw new Error('Nenhuma alteração informada.');
+  await withTiming('atualizar gasto por ID', { requestId, displayId }, async () => {
+    const { error } = await getSupabaseClient().from('transactions').update(patch).eq('display_id', displayId);
+    if (error) throw new Error(`Erro ao atualizar gasto: ${error.message}`);
+  });
+}

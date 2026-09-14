@@ -24,6 +24,22 @@ interface RecorrenciaRow {
   last_generated_month: string | null;
 }
 
+async function formatarAjudaRecorrente(requestId: string): Promise<string> {
+  const categoryMap = await getCategoryMap(requestId);
+  const categorias = Object.values(categoryMap).map((nome) => `• ${nome}`);
+  return [
+    '🔁 *Como cadastrar uma compra recorrente:*',
+    '',
+    'Use assim:',
+    '`/recorrente add <descrição> <valor> <dia> [categoria]`',
+    'Exemplo: `/recorrente add Netflix 39,90 15 Assinaturas`',
+    'O dia deve estar entre 1 e 28.',
+    '',
+    '🏷️ *Categorias disponíveis:*',
+    ...categorias,
+  ].join('\n');
+}
+
 /** Lista as recorrências cadastradas. */
 export async function handleRecorrenteListar(
   chatId: number,
@@ -42,13 +58,15 @@ export async function handleRecorrenteListar(
     await bot.sendMessage(chatId, '❌ Não consegui listar as recorrências. Tente novamente.');
     return;
   }
-
   const rows = (data ?? []) as RecorrenciaRow[];
   if (rows.length === 0) {
     await bot.sendMessage(
       chatId,
-      '📭 Nenhuma despesa recorrente cadastrada.\n\nUse `/recorrente add <descrição> <valor> <dia> [categoria]` para criar uma.\n\n' +
-        RODAPE_UX
+        '📭 Nenhuma despesa recorrente cadastrada.\n\n' +
+          (await formatarAjudaRecorrente(requestId)) +
+          '\n\n' +
+          RODAPE_UX,
+        { parse_mode: 'Markdown' }
     );
     return;
   }
@@ -86,8 +104,7 @@ export async function handleRecorrenteAdd(
   if (partes.length < 3) {
     await bot.sendMessage(
       chatId,
-      'Use assim: `/recorrente add <descrição> <valor> <dia> [categoria]`\n' +
-        'Ex: `/recorrente add Netflix 39,90 15 Assinaturas`'
+      `${await formatarAjudaRecorrente(requestId)}\n\n${RODAPE_UX}`
     );
     return;
   }
@@ -95,13 +112,17 @@ export async function handleRecorrenteAdd(
   // O dia é o último token numérico; o valor é o penúltimo token numérico.
   const diaIdx = partes.findIndex((p) => /^\d{1,2}$/.test(p));
   if (diaIdx === -1) {
-    await bot.sendMessage(chatId, '❌ Não consegui identificar o dia do mês. Use um número de 1 a 28.');
+    await bot.sendMessage(chatId, `❌ Não consegui identificar o dia do mês.\n\n${await formatarAjudaRecorrente(requestId)}`, {
+      parse_mode: 'Markdown',
+    });
     return;
   }
 
   const dia = parseInt(partes[diaIdx], 10);
   if (dia < 1 || dia > 28) {
-    await bot.sendMessage(chatId, '❌ O dia deve estar entre 1 e 28.');
+    await bot.sendMessage(chatId, `❌ O dia deve estar entre 1 e 28.\n\n${await formatarAjudaRecorrente(requestId)}`, {
+      parse_mode: 'Markdown',
+    });
     return;
   }
 
@@ -135,7 +156,8 @@ export async function handleRecorrenteAdd(
   if (!categoriaId) {
     await bot.sendMessage(
       chatId,
-      `❌ Categoria "${categoriaNome}" não encontrada. Categorias disponíveis: ${Object.values(categoryMap).join(', ')}`
+        `❌ Categoria "${categoriaNome}" não encontrada.\n\n${await formatarAjudaRecorrente(requestId)}`,
+        { parse_mode: 'Markdown' }
     );
     return;
   }

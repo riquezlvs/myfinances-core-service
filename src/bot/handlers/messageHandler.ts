@@ -35,6 +35,7 @@ import { enqueue } from '../../utils/concurrency';
 import { verificarRateLimit, tokensRestantes } from '../../utils/rateLimit';
 import {
   consultarGastosGranulares,
+  atualizarGastoPorId,
   type ResultadoConsultaGranular,
 } from '../../services/transactions/transactionService';
 import { mesAnoNaJanela, mesAnoAtual, rotuloDoMes } from '../../utils/month';
@@ -81,7 +82,6 @@ async function handleNovoGasto(
     requestId,
     transaction,
   });
-
   // Salvamento + confirmação com botões vivem em novoGasto.ts, compartilhados
   // com o fluxo de áudio (voiceHandler) para garantir UX idêntica.
   await registrarEResponderGasto(chatId, transaction, rawInput, requestId, bot, avisos);
@@ -102,6 +102,7 @@ async function handlePagamentoDivida(
         'Tente algo como "minha irmã pagou 25 reais" ou use /pago <nome> [valor].'
     );
     return;
+
   }
 
   const resultado = await processarPagamento(extraido.nome, extraido.valor, requestId);
@@ -294,6 +295,55 @@ async function handleOutros(chatId: number, bot: TelegramBot): Promise<void> {
   );
 }
 
+function extrairEdicaoPorId(texto: string): { id: number; campo: 'valor' | 'descricao' | 'data'; valor: string } | null {
+  const idMatch = texto.match(/(?:#|id\s*)(\d+)/i);
+  if (!idMatch) return null;
+  const id = Number(idMatch[1]);
+  const depois = texto.slice((idMatch.index ?? 0) + idMatch[0].length);
+  const valor = depois.match(/(?:valor|preço|preco)\s*(?:para|de)?\s*R?\$?\s*([\d.,]+)/i);
+  if (valor) return { id, campo: 'valor', valor: valor[1] };
+  const data = depois.match(/(?:data|dia)\s*(?:para|em)?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2})/i);
+  if (data) return { id, campo: 'data', valor: data[1] };
+  const descricao = depois.match(/(?:descri(?:ção|cao)|nome)\s*(?:para|como|:)?\s*(.+)$/i);
+  if (descricao) return { id, campo: 'descricao', valor: descricao[1].trim() };
+  return null;
+}
+
+async function tentarEditarPorId(chatId: number, texto: string, requestId: string, bot: TelegramBot): Promise<boolean> {
+  const edicao = extrairEdicaoPorId(texto);
+  if (!edicao) return false;
+
+  let patch: { total_amount?: number; description?: string; occurred_at?: string };
+  let resumo: string;
+  if (edicao.campo === 'valor') {
+    const valor = Number(edicao.valor.replace(/\./g, '').replace(',', '.'));
+    if (!Number.isFinite(valor) || valor <= 0) {
+      await bot.sendMessage(chatId, '❓ Não entendi o novo valor. Exemplo: "altera o gasto #42 para R$ 85,90".');
+      return true;
+    }
+    patch = { total_amount: valor };
+    resumo = `valor para R$ ${formatarReal(valor)}`;
+  } else if (edicao.campo === 'data') {
+    const partes = edicao.valor.split(/[/-]/).map(Number);
+    const iso = partes[0] > 31
+      ? `${edicao.valor}T12:00:00.000Z`
+      : `${partes[2] < 100 ? 2000 + partes[2] : partes[2]}-${String(partes[1]).padStart(2, '0')}-${String(partes[0]).padStart(2, '0')}T12:00:00.000Z`;
+    if (Number.isNaN(new Date(iso).getTime())) {
+      await bot.sendMessage(chatId, '❓ Não entendi a data. Use, por exemplo, 15/08/2024.');
+      return true;
+    }
+    patch = { occurred_at: iso };
+    resumo = `data para ${formatarDataCurta(iso)}`;
+  } else {
+    patch = { description: edicao.valor };
+    resumo = `descrição para "${edicao.valor}"`;
+  }
+
+  await atualizarGastoPorId(edicao.id, patch, requestId);
+  await bot.sendMessage(chatId, `✅ Atualizei a compra #${edicao.id}: ${resumo}.\n\n${RODAPE_UX}`);
+  return true;
+}
+
 /**
  * Regra de segurança (Fase 3 — Double-Opt-In): o roteador de IA NUNCA executa
  * operações destrutivas. Se a intenção classificada exige remoção, o bot
@@ -378,7 +428,9 @@ async function handleCartaoViaIA(
       if (!params.nomeCartao || params.closingDay == null) {
         await bot.sendMessage(
           chatId,
-          '💳 Para cadastrar o cartão, me diga o nome e o dia de fechamento (1–28) — ex: "cadastra o cartão nubank, fecha dia 20" ou /cartao add nubank 20.'
+          '💳 Para cadastrar o cartão, me diga nome, dia de fechamento (1–28) e, se necessário, o tipo.\n\n' +
+            'Tipos disponíveis: credito, vr (vale-refeição) ou va (vale-alimentação).\n' +
+            'Ex: "cadastra Nubank, fecha dia 20, tipo credito".'
         );
         return;
       }
@@ -672,8 +724,10 @@ export async function messageHandler(
     log('error', '❌ Fluxo terminou em erro', { requestId, erro: mensagemErro });
     await bot.sendMessage(
       chatId,
-      '❌ Não consegui processar sua mensagem. Tente novamente — se o problema persistir, ' +
-        'verifique o log (requestId para referência).'
+      /\b503\b|service unavailable|overloaded|unavailable/i.test(mensagemErro)
+        ? 'Estou com uma sobrecarga momentânea na minha conexão com a IA. Poderia tentar enviar novamente em alguns instantes? 😊'
+        : '❌ Não consegui processar sua mensagem. Tente novamente — se o problema persistir, ' +
+          'verifique o log (requestId para referência).'
     );
   }
 }
@@ -692,6 +746,8 @@ async function processarMensagemAutorizada(
   try {
     const foiComando = await rotearComando(chatId, texto, requestId, bot);
     if (foiComando) return;
+
+    if (await tentarEditarPorId(chatId, texto, requestId, bot)) return;
 
     await bot.sendChatAction(chatId, 'typing');
 
@@ -763,8 +819,10 @@ async function processarMensagemAutorizada(
     // (vinculada ao requestId acima) para diagnóstico seguro.
     await bot.sendMessage(
       chatId,
-      '❌ Não consegui processar sua mensagem. Tente novamente — se o problema persistir, ' +
-        'verifique o log (requestId para referência).'
+      /\b503\b|service unavailable|overloaded|unavailable/i.test(mensagemErro)
+        ? 'Estou com uma sobrecarga momentânea na minha conexão com a IA. Poderia tentar enviar novamente em alguns instantes? 😊'
+        : '❌ Não consegui processar sua mensagem. Tente novamente — se o problema persistir, ' +
+          'verifique o log (requestId para referência).'
     );
   }
 }

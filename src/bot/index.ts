@@ -5,6 +5,7 @@ import { messageHandler } from './handlers/messageHandler';
 import { voiceHandler } from './handlers/voiceHandler';
 import { callbackQueryHandler } from './handlers/callbackQueryHandler';
 import { setupCommands } from './setupCommands';
+import { configureBot } from './setupBot';
 import { iniciarCronRecorrencias } from '../services/recurring/recurringService';
 import { iniciarCronLembreteMensal } from '../services/recurring/proactiveService';
 import { mensagemDuplicada } from '../utils/dedupe';
@@ -16,6 +17,9 @@ import { mensagemDuplicada } from '../utils/dedupe';
  */
 export async function iniciarBot(): Promise<{ shutdown: () => Promise<void> }> {
   const bot = getTelegramBot();
+
+  // Bot: configura identidade (nome, descrição, foto) antes de escutar.
+  await configureBot(bot);
 
   bot.on('message', (msg) => {
     // Fase 8: dedupe FIFO — reentregas do Telegram não podem disparar duas

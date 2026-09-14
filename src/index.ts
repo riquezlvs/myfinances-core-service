@@ -1,15 +1,42 @@
 import 'dotenv/config';
+import http from 'http';
 import { iniciarBot } from './bot';
 import { log } from './utils/logger';
 
 async function main(): Promise<void> {
+  const porta = Number(process.env.PORT || 3000);
+  const servidorHealthcheck = http.createServer((requisicao, resposta) => {
+    if (requisicao.method === 'GET') {
+      resposta.writeHead(200, { 'Content-Type': 'text/plain' });
+      resposta.end('Guará Online');
+      return;
+    }
+
+    resposta.writeHead(405, { 'Content-Type': 'text/plain' });
+    resposta.end('Método não permitido');
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    servidorHealthcheck.once('error', reject);
+    servidorHealthcheck.listen(porta, () => {
+      servidorHealthcheck.removeListener('error', reject);
+      resolve();
+    });
+  });
+  log('info', `Servidor de healthcheck HTTP ativo na porta ${porta}`);
+
   const { shutdown } = await iniciarBot();
 
   // Fase 6 — Graceful shutdown: SIGINT (Ctrl+C) e SIGTERM (docker stop,
   // kill) param os crons e o polling do Telegram sem processos órfãos.
   const encerrar = (sinal: string): void => {
     log('info', `📡 Sinal ${sinal} recebido — iniciando shutdown...`);
-    void shutdown().then(() => process.exit(0));
+    void shutdown().then(
+      () =>
+        new Promise<void>((resolve) => {
+          servidorHealthcheck.close(() => resolve());
+        })
+    ).then(() => process.exit(0));
   };
 
   process.on('SIGINT', () => encerrar('SIGINT'));

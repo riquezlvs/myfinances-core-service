@@ -1,6 +1,6 @@
-# MyFinances Core Service
+# MyFinances Core Service — Guará IA 🦅
 
-Bot inteligente para Telegram de finanças pessoais, com processamento de linguagem natural via Gemini 3.5-flash, persistência no Supabase (PostgreSQL) e proteções robustas contra alucinações de IA.
+**Guará IA** é o nome do assistente no Telegram: um bot inteligente de finanças pessoais, com processamento de linguagem natural via Gemini 3.5-flash, persistência no Supabase (PostgreSQL) e proteções robustas contra alucinações de IA.
 
 ---
 
@@ -131,8 +131,11 @@ npm run typecheck
 | `/grafico` | Gráfico de gastos |
 | `/insight` | Análise IA do mês |
 | `/meta <categoria> <limite>` | Metas de orçamento |
-| `/cartao` | Gerenciar cartões |
-| `/cartao add <nome> <dia> [credito\|vr\|va]` | Adicionar cartão/vale |
+| `/cartao` | Lista os comandos + cartões/vales (ajuda clara) |
+| `/cartao listar` | Apenas a lista, sem repetir a ajuda |
+| `/cartao add <nome> [dia] [credito\|vr\|va]` | Adicionar cartão/vale (dia=1 e tipo=credito por padrão) |
+| `/cartao add Santander 30` | Nome + dia (tipo=credit por padrão) |
+| `/cartao add Santander vr` | Nome + tipo (dia=1 por padrão) |
 | `/cartao principal <nome>` | Definir como principal |
 | `/cartao fatura <nome>` | Ver fatura do período |
 | `/cartao remover <nome>` | Remover cartão/vale |
@@ -151,8 +154,17 @@ npm run typecheck
 | `vr` ou `refeicao` | Vale-refeição |
 | `va` ou `alimentacao` | Vale-alimentação |
 
+> Dia de fechamento: número de 1 a 28 (`30` é normalizado para `28`).
+> Sem cartão cadastrado, `/cartao` mostra primeiro a ajuda com todos os
+> sub-comandos e depois a orientação de cadastro com exemplos.
+
 **Exemplo:**
 ```bash
+/cartao                      # ajuda + lista (vazia: "Nenhum cartão ou vale cadastrado ainda")
+/cartao listar               # só a lista
+/cartao add Santander        # nome, dia=1, tipo=credit
+/cartao add Santander 30     # nome, dia=28 (clamp), tipo=credit
+/cartao add Santander vr     # nome, dia=1, tipo=meal_voucher
 /cartao add Santander 1 credito
 /cartao add Ticket 15 vr
 ```
@@ -195,6 +207,57 @@ Veja `.env.example` para a lista completa. Principais:
 | `GEMINI_API_KEY` | API Key do Google AI Studio |
 | `SUPABASE_URL` | URL do projeto Supabase |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service Role Key (nunca expor) |
+| `BOT_NAME` | Nome exibido do bot (padrão: `Guará IA`) |
+| `BOT_PROFILE_PHOTO_PATH` | Caminho local (`./assets/bot-avatar.jpg`) ou URL da foto de perfil |
+
+---
+
+## Identidade do Bot (Guará IA) 🦅
+
+Na inicialização (`iniciarBot()` → `configureBot()`), o serviço sincroniza a
+identidade do bot no Telegram:
+
+1. **Nome** — `setMyName({ name: BOT_NAME })` (padrão: `Guará IA`);
+2. **Descrição curta** — o que o bot faz (via `setMyShortDescription`);
+3. **Descrição longa** — bio com exemplos de uso (via `setMyDescription`);
+4. **Foto de perfil** — `BOT_PROFILE_PHOTO_PATH` pode ser caminho local ou URL.
+   O caminho é resolvido a partir da **raiz do projeto** (ex:
+   `BOT_PROFILE_PHOTO_PATH=./assets/bot-avatar.jpg` resolve para
+   `<repo>/assets/bot-avatar.jpg`), e imagens acima de 512KB são recusadas
+   antes do upload. A biblioteca `node-telegram-bot-api@0.66` ainda não expõe
+   `setMyProfilePhoto`, então o upload usa `fetch` direto na API do Telegram.
+
+> ⚠️ A Bot API impõe texto puro + limites: `short_description` 0–120 e
+> `description` 0–512 caracteres (Markdown, emoji e quebras de linha causam
+> `400 BOT_SHARETEXT_INVALID` / `BOT_DESC_INVALID`). O código sanitiza e
+> trunca localmente (`sanitizarTextoIdentidade` + `truncarNoLimite`) antes de
+> enviar, em vez de deixar a API rejeitar.
+
+Arquivos:
+
+| Arquivo | Papel |
+|---|---|
+| `src/bot/setupBot.ts` | `configureBot(bot)` — aplica nome/descrições/foto |
+| `scripts/configure-bot.ts` | Script standalone: `npm run setup-bot` |
+| `assets/README.md` | Onde colocar a imagem real do projeto (`assets/bot-avatar.jpg`) |
+
+> 📸 Foto real: salve a imagem em `assets/bot-avatar.jpg`,
+> defina `BOT_PROFILE_PHOTO_PATH=./assets/bot-avatar.jpg` no `.env` e rode
+> `npm run setup-bot` (ou apenas suba o serviço — a configuração também roda
+> no boot via `iniciarBot()`).
+>
+> ⚠️ 429 `Too Many Requests` (ex: `retry after 85994`) após várias tentativas
+> é rate-limit da Bot API no `setMy*`, não erro de código — aguarde o tempo
+> indicado e rode `npm run setup-bot` de novo (cada etapa tem try/catch
+> próprio, então o que já sincronizou não precisa repetir).
+>
+> ⚠️ Limitação conhecida da Bot API: o username (@...) e a foto do cabeçalho
+> do chat só podem ser trocados manualmente no **@BotFather**. O que dá para
+> sincronizar via código (`setMyName`, `setMyShortDescription`,
+> `setMyDescription`, `setMyProfilePhoto`) já está coberto por `configureBot`.
+> Testes: `tests/unit/commands/setupBot.test.ts` (identidade, tolerância a
+> falhas, `montarFotoPerfil`) e `tests/unit/commands/cartao.test.ts`
+> (`parseArgumentosAdd` + ajuda do `/cartao`).
 
 ---
 

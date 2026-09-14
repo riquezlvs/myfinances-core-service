@@ -141,7 +141,9 @@ function clamparOccurredAt(occurredAtISO: string, agoraISO: string, requestId: s
   }
 
   const driftMs = occurredMs - agoraMs;
-  if (Math.abs(driftMs) <= DRIFT_MAX_MS) return occurredAtISO;
+  // Datas passadas podem ser antigas: o usuário pode lançar um gasto histórico.
+  // Mantemos o limite apenas para datas futuras, que indicam erro com mais frequência.
+  if (driftMs <= 0 || driftMs <= DRIFT_MAX_MS) return occurredAtISO;
 
   const clampedMs = agoraMs + Math.sign(driftMs) * DRIFT_MAX_MS;
   const clampedISO = new Date(clampedMs).toISOString();
@@ -220,6 +222,8 @@ export function validarTransacao(
     warnings.push(
       '⚠️ Ajustei a data para uma dentro do range permitido (a que você indicou parecia inválida ou muito distante).'
     );
+  } else if (new Date(occurredAt).getTime() < Date.now() - DRIFT_MAX_MS) {
+    warnings.push('📅 Registrei a data antiga informada. Confira se ela está correta.');
   }
 
   return {

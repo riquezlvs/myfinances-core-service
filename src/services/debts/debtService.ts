@@ -3,6 +3,7 @@ import { withTiming, log } from '../../utils/logger';
 import { buscarPessoaId, listarOuCriarPessoas } from '../people/peopleService';
 import { formatarReal } from '../../utils/formatters';
 import type { SaldoTerceiro, ResultadoPagamento } from '../../types/transaction';
+import { intervaloDoMes, mesAnoAtual } from '../../utils/month';
 
 /** Resultado do split de contas: transação + linhas de dívida criadas. */
 export interface ResultadoSplit {
@@ -22,13 +23,13 @@ export interface LinhaDividaSplit {
   ocorreuEm: string;
 }
 
-export async function getSaldoTerceiros(requestId: string): Promise<SaldoTerceiro[]> {
+export async function getSaldoTerceiros(requestId: string, incluirTotais = false): Promise<SaldoTerceiro[]> {
   return withTiming('calcular saldo de terceiros', { requestId }, async () => {
     const supabase = getSupabaseClient();
 
     const { data: dividas, error: erroDividas } = await supabase
       .from('transactions')
-      .select('third_party_id, third_party_share_amount, people(name)')
+      .select('display_id, third_party_id, third_party_share_amount, installment_number, installment_total, occurred_at, people(name)')
       .gt('third_party_share_amount', 0);
 
     if (erroDividas) throw new Error(`Erro ao buscar dívidas: ${erroDividas.message}`);
@@ -39,21 +40,24 @@ export async function getSaldoTerceiros(requestId: string): Promise<SaldoTerceir
 
     if (erroPagamentos) throw new Error(`Erro ao buscar pagamentos: ${erroPagamentos.message}`);
 
-    const saldosPorId = new Map<string, { nome: string; saldo: number }>();
+    const saldosPorId = new Map<string, { nome: string; linhas: any[] }>();
+    const intervaloAtual = intervaloDoMes(mesAnoAtual());
 
     for (const linha of (dividas ?? []) as any[]) {
       const id: string | null = linha.third_party_id;
       const nome: string | undefined = linha.people?.name;
       if (!id || !nome) continue;
-      const atual = saldosPorId.get(id) ?? { nome, saldo: 0 };
-      atual.saldo += Number(linha.third_party_share_amount);
+      const atual = saldosPorId.get(id) ?? { nome, linhas: [] };
+      atual.linhas.push(linha);
       saldosPorId.set(id, atual);
     }
 
+    const pagamentosPorId = new Map<string, number>();
     for (const pagamento of (pagamentos ?? []) as any[]) {
-      const atual = saldosPorId.get(pagamento.person_id);
-      if (!atual) continue;
-      atual.saldo -= Number(pagamento.amount);
+      pagamentosPorId.set(
+        pagamento.person_id,
+        (pagamentosPorId.get(pagamento.person_id) ?? 0) + Number(pagamento.amount)
+      );
     }
 
     log('info', 'Saldos calculados', {
@@ -62,9 +66,47 @@ export async function getSaldoTerceiros(requestId: string): Promise<SaldoTerceir
       qtd_pagamentos: pagamentos?.length ?? 0,
     });
 
-    return Array.from(saldosPorId.values())
-      .filter((s) => s.saldo > 0.009)
-      .map((s) => ({ nome: s.nome, valor: Math.round(s.saldo * 100) / 100 }));
+    return Array.from(saldosPorId.entries())
+      .map(([id, s]) => {
+        const linhas = [...s.linhas].sort(
+          (a, b) => new Date(a.occurred_at ?? 0).getTime() - new Date(b.occurred_at ?? 0).getTime()
+        );
+        let pagamentoRestante = pagamentosPorId.get(id) ?? 0;
+        const parcelas = linhas
+          .map((linha) => {
+            const bruto = Number(linha.third_party_share_amount);
+            const abatimento = Math.min(bruto, pagamentoRestante);
+            pagamentoRestante -= abatimento;
+            const valor = Math.round((bruto - abatimento) * 100) / 100;
+            return {
+              displayId: linha.display_id == null ? undefined : Number(linha.display_id),
+              valor,
+              numero: linha.installment_number == null ? undefined : Number(linha.installment_number),
+              total: linha.installment_total == null ? undefined : Number(linha.installment_total),
+              ocorreuEm: linha.occurred_at ?? undefined,
+            };
+          })
+          .filter((parcela) => parcela.valor > 0.009);
+        const valor = Math.round(parcelas.reduce((total, parcela) => total + parcela.valor, 0) * 100) / 100;
+        const total = Math.round(
+          s.linhas.reduce((soma, linha) => soma + Number(linha.third_party_share_amount), 0) * 100
+        ) / 100;
+        const totalMes = intervaloAtual
+          ? Math.round(
+              s.linhas
+                .filter((linha) => linha.occurred_at >= intervaloAtual.inicioISO && linha.occurred_at < intervaloAtual.fimISO)
+                .reduce((soma, linha) => soma + Number(linha.third_party_share_amount), 0) * 100
+            ) / 100
+          : 0;
+        const saldo: SaldoTerceiro = { nome: s.nome, valor };
+        if (incluirTotais) {
+          saldo.total = total;
+          saldo.totalMes = totalMes;
+        }
+        if (linhas.some((linha) => linha.installment_total != null)) saldo.parcelas = parcelas;
+        return saldo;
+      })
+      .filter((s) => s.valor > 0.009);
   });
 }
 

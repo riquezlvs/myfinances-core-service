@@ -9,12 +9,18 @@ import {
   type StatusMeta,
 } from '../../services/budgets/budgetService';
 import { RODAPE_UX } from '../../config/constants';
+import { getCategoryMap } from '../../services/categories/categoryCache';
 
 const ICONE_NIVEL: Record<StatusMeta['nivel'], string> = {
   ok: '🟢',
   aviso80: '🟡',
   limite100: '🔴',
 };
+
+async function opcoesCategorias(requestId: string): Promise<string> {
+  const mapa = await getCategoryMap(requestId);
+  return ['🏷️ Categorias disponíveis:', ...Object.values(mapa).map((nome) => `• ${nome}`)].join('\n');
+}
 
 /** Lista as metas com o consumo atual do mês. */
 export async function handleMetaListar(
@@ -74,7 +80,7 @@ export async function handleMeta(
     try {
       const removida = await removerMeta(nome, requestId);
       if (!removida) {
-        await bot.sendMessage(chatId, `❓ Não encontrei a categoria "${nome}".`);
+        await bot.sendMessage(chatId, `❓ Não encontrei a categoria "${nome}".\n\n${await opcoesCategorias(requestId)}`);
         return;
       }
       await bot.sendMessage(chatId, `🗑️ Meta de "${removida}" removida.\n\n${RODAPE_UX}`);
@@ -88,21 +94,21 @@ export async function handleMeta(
   // /meta <categoria> <limite>: o limite é o último token numérico.
   const limiteStr = partes[partes.length - 1];
   if (!/^\d+(?:[.,]\d{1,2})?$/.test(limiteStr)) {
-    await bot.sendMessage(chatId, 'Use assim: /meta alimentacao 600');
+    await bot.sendMessage(chatId, `Use assim: /meta alimentacao 600\n\n${await opcoesCategorias(requestId)}`);
     return;
   }
   const limite = parseFloat(limiteStr.replace(',', '.'));
   const nomeCategoria = partes.slice(0, -1).join(' ');
 
   if (!nomeCategoria || limite <= 0) {
-    await bot.sendMessage(chatId, 'Use assim: /meta alimentacao 600');
+    await bot.sendMessage(chatId, `Use assim: /meta alimentacao 600\n\n${await opcoesCategorias(requestId)}`);
     return;
   }
 
   try {
     const resultado = await definirMeta(nomeCategoria, limite, requestId);
     if (!resultado) {
-      await bot.sendMessage(chatId, `❓ Não encontrei a categoria "${nomeCategoria}".`);
+      await bot.sendMessage(chatId, `❓ Não encontrei a categoria "${nomeCategoria}".\n\n${await opcoesCategorias(requestId)}`);
       return;
     }
     await bot.sendMessage(
