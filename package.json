@@ -30,7 +30,7 @@
     "@types/node-telegram-bot-api": "^0.64.7",
     "@vitest/coverage-v8": "^2.1.0",
     "tsx": "^4.23.13",
-    "typescript": "5.9.3",
+    "typescript": "^7.0.2",
     "vitest": "^2.1.0"
   }
 }
