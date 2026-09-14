@@ -104,6 +104,13 @@ export function buildResumoKeyboard(): InlineKeyboardMarkup {
   };
 }
 
+/** Teclado pós-exclusão de transação: oferece retorno rápido ao resumo e às faturas. */
+export function buildPosExclusaoKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [[{ ...BOTON_RESUMO }, { ...BOTON_FATURAS }]],
+  };
+}
+
 /** 8.6 — Teclado contextual para avisos de orçamento estourado (gráfico/insight). */
 export function buildAlertaMetaKeyboard(): InlineKeyboardMarkup {
   return {

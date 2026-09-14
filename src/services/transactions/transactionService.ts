@@ -657,10 +657,17 @@ export async function registrarLoteExtrato(params: {
           ? ` (${item.installment_number}/${item.installment_total})`
           : '';
 
+      // Se a descrição do item já contém a legenda ou é a própria legenda, não adiciona prefixo
+      const descJaContemComentario =
+        comentarioLote &&
+        item.description.toLowerCase().includes(comentarioLote.trim().toLowerCase());
+      const prefixoEfetivo =
+        prefixoComentario && !descJaContemComentario ? prefixoComentario : '';
+
       const { data, error } = await supabase
         .from('transactions')
         .insert({
-          description: `${prefixoComentario}${item.description}${sufixoParcela}`,
+          description: `${prefixoEfetivo}${item.description}${sufixoParcela}`,
           total_amount: item.amount,
           category_id: item.category_id,
           payment_method: 'credit_card',
@@ -681,7 +688,7 @@ export async function registrarLoteExtrato(params: {
       if (data?.display_id) {
         inseridos.push({
           displayId: data.display_id as number,
-          description: item.description,
+          description: `${prefixoEfetivo}${item.description}${sufixoParcela}`,
           amount: item.amount,
         });
         // Adiciona à lista de existentes em memória para evitar duplicar itens repetidos no próprio extrato

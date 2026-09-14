@@ -125,14 +125,25 @@ export async function photoHandler(
     }
 
     // 5) Converte os itens para persistência
-    const itensParaLote: ItemLoteExtrato[] = extrato.items.map((item) => ({
-      description: item.description,
-      amount: item.amount,
-      category_id: item.category_id,
-      occurred_at: item.date.includes('T') ? item.date : `${item.date}T12:00:00-03:00`,
-      installment_number: item.installment_current,
-      installment_total: item.installment_total,
-    }));
+    // Se o usuário enviou uma legenda na mensagem e há uma compra principal/única, usa o nome definido pelo usuário.
+    const itensParaLote: ItemLoteExtrato[] = extrato.items.map((item, index) => {
+      let descricaoFinal = item.description;
+      if (legenda) {
+        if (extrato.items.length === 1) {
+          descricaoFinal = legenda;
+        } else if (index === 0) {
+          descricaoFinal = `${legenda} (${item.description})`;
+        }
+      }
+      return {
+        description: descricaoFinal,
+        amount: item.amount,
+        category_id: item.category_id,
+        occurred_at: item.date.includes('T') ? item.date : `${item.date}T12:00:00-03:00`,
+        installment_number: item.installment_current,
+        installment_total: item.installment_total,
+      };
+    });
 
     // 6) Registro em lote no banco com prevenção de duplicidades
     const resultadoLote = await registrarLoteExtrato({

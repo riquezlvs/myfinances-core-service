@@ -147,7 +147,7 @@ export function buildStatementPrompt(
     : 'Nenhum cartão cadastrado previamente.';
 
   const contextoComentario = comentarioUsuario?.trim()
-    ? `Observação/título enviado pelo usuário junto à foto: "${comentarioUsuario.trim()}". Considere isso caso indique um cartão específico (ex: "fatura nubank", "itau") ou contexto da despesa.`
+    ? `Observação/título enviado pelo usuário junto à foto: "${comentarioUsuario.trim()}". Considere isso para o nome/título da compra ou para indicar um cartão específico. ATENÇÃO: NÃO crie uma transação extra apenas para a mensagem/título do usuário; a foto contém o comprovante/extrato da despesa e a mensagem do usuário representa o nome que o usuário deu a essa despesa.`
     : '';
 
   return [
@@ -161,10 +161,12 @@ export function buildStatementPrompt(
     '3) "items": Lista de todas as transações de compra/gasto visíveis.',
     '',
     'Regras essenciais para extração dos itens:',
+    '  - Se o usuário forneceu uma observação/título na mensagem e a imagem for de um comprovante ou compra única, use preferencialmente o nome/título informado pelo usuário na mensagem como a "description" da despesa.',
     '  - Valor (amount): No Brasil, vírgula é decimal (ex: 125,50 -> 125.50). Registre o valor da compra ou da parcela listada nesta fatura. Sempre positivo.',
     '  - Parcelamento: Observe atentamente sufixos ou anotações como "02/10", "3 de 10", "PARC 01/05" ou "(2/4)". Preencha installment_current e installment_total. Se for compra à vista, deixe null.',
     '  - Datas: Preencha "date" no formato ISO 8601 (YYYY-MM-DD). Se na fatura só constar dia e mês (ex: "15/AGO" ou "03/09"), deduza o ano usando a data de referência.',
     '  - Pagamentos e Estornos: Se houver linhas como "Pagamento recebido", "Pagamento de fatura", "Crédito em conta" ou estorno, marque is_payment_or_credit = true.',
+    '  - NÃO crie itens duplicados ou inventados: extraia apenas as transações reais da imagem.',
     '  - NÃO inclua linhas que representem totais ou resumos (ex: "Total da Fatura", "Saldo Atual", "Limite Disponível", "Subtotal").',
   ].join('\n');
 }

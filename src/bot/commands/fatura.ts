@@ -33,8 +33,9 @@ export interface RecorrenciaPrevista {
 
 function formatarItens(itens: ItemFatura[]): string[] {
   return itens.map((item) => {
+    const jaTemParcela = /\(\d+\/\d+\)\s*$/.test(item.description);
     const parcelaTag =
-      item.installment_number && item.installment_total
+      !jaTemParcela && item.installment_number && item.installment_total
         ? ` (${item.installment_number}/${item.installment_total})`
         : '';
     return `#${item.display_id} · ${formatarDataCurta(item.occurred_at)} · ${item.description}${parcelaTag} — R$ ${formatarReal(

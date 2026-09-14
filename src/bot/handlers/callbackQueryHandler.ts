@@ -21,6 +21,7 @@ import {
   buildExtratoKeyboard,
   buildCategoryBatchKeyboard,
   buildCardBatchKeyboard,
+  buildPosExclusaoKeyboard,
   metodoCurtoParaCompleto,
 } from '../keyboards/transactionKeyboard';
 import { formatarMetodo } from '../../utils/formatters';
@@ -86,6 +87,13 @@ export async function callbackQueryHandler(
           apagarTransacaoComGrupo(displayId, requestId)
         );
         await bot.deleteMessage(chatId, messageId);
+        const msgTexto =
+          resultado.displayIds.length > 1
+            ? `✅ Compra parcelada desfeita (${resultado.displayIds.length} parcelas removidas).`
+            : `✅ Gasto #${displayId} desfeito.`;
+        await bot.sendMessage(chatId, `${msgTexto}\n\n${RODAPE_UX}`, {
+          reply_markup: buildPosExclusaoKeyboard(),
+        });
         await bot.answerCallbackQuery(query.id, {
           text: resultado.displayIds.length > 1 ? '✅ Compra parcelada desfeita.' : '✅ Gasto desfeito.',
         });
@@ -244,6 +252,11 @@ async function manipularAcoesLoteExtrato(
         await apagarTransacoesPorIds(ids, requestId);
       });
       await bot.deleteMessage(chatId, messageId);
+      await bot.sendMessage(
+        chatId,
+        `✅ Importação do extrato desfeita com sucesso (${ids.length} lançamentos removidos).\n\n${RODAPE_UX}`,
+        { reply_markup: buildPosExclusaoKeyboard() }
+      );
       await bot.answerCallbackQuery(query.id, { text: '✅ Importação do extrato desfeita com sucesso.' });
       break;
     }

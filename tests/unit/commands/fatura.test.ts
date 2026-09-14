@@ -152,6 +152,32 @@ describe('fatura — handleFatura', () => {
     expect(texto).toContain('*Total estimado:* R$ 205,90');
   });
 
+  it('não duplica indicador de parcelas quando a descrição já contém (X/Y)', async () => {
+    const bot = criarBotMock();
+    mockListarCartoes.mockResolvedValue([
+      { id: 'c-1', name: 'Nubank', closing_day: 10, card_type: 'credit', is_default: true },
+    ]);
+    mockGetFaturaDoPeriodo.mockResolvedValue([
+      {
+        display_id: 102,
+        description: 'Notebook (1/3)',
+        total_amount: 500,
+        occurred_at: '2026-09-12T10:00:00Z',
+        installment_number: 1,
+        installment_total: 3,
+      },
+    ]);
+    mockBuscarRecorrenciasCredito.mockResolvedValue([]);
+
+    await handleFatura(12345, 'req-2', bot);
+
+    expect(bot.sendMessage).toHaveBeenCalledTimes(1);
+    const texto = bot.sendMessage.mock.calls[0][1] as string;
+
+    expect(texto).toContain('#102 · 12/09 · Notebook (1/3) — R$ 500,00');
+    expect(texto).not.toContain('(1/3) (1/3)');
+  });
+
   it('exibe mensagem amigável quando não há lançamentos nem recorrências', async () => {
     const bot = criarBotMock();
     mockListarCartoes.mockResolvedValue([]);

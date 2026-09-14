@@ -2,6 +2,7 @@ import type TelegramBot from 'node-telegram-bot-api';
 import { getTelegramBot } from '../../clients/telegramClient';
 import { apagarTransacaoPorId } from '../../services/transactions/transactionService';
 import { RODAPE_UX } from '../../config/constants';
+import { buildPosExclusaoKeyboard } from '../keyboards/transactionKeyboard';
 
 export async function handleApagar(
   chatId: number,
@@ -30,5 +31,7 @@ export async function handleApagar(
         )}).`
       : `✅ Gasto #${id} apagado.`;
 
-  await bot.sendMessage(chatId, `${mensagem}\n\n${RODAPE_UX}`);
+  await bot.sendMessage(chatId, `${mensagem}\n\n${RODAPE_UX}`, {
+    reply_markup: buildPosExclusaoKeyboard(),
+  });
 }
