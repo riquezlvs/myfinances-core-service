@@ -51,12 +51,11 @@ describe('validarEPadronizarGasto', () => {
     expect(resultado.occurred_at).toBe(esperado);
   });
 
-  it('deve clampar occurred_at muito antigo além de 30 dias para agora - 30 dias', () => {
+  it('deve preservar occurred_at no passado para permitir gastos históricos', () => {
     const muitoNoPassado = '2020-01-01T12:00:00.000Z';
     const resultado = validarEPadronizarGasto(baseParsed({ occurred_at: muitoNoPassado }), categoryMap, AGORA_ISO);
 
-    const esperado = new Date(new Date(AGORA_ISO).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    expect(resultado.occurred_at).toBe(esperado);
+    expect(resultado.occurred_at).toBe(muitoNoPassado);
   });
 
   it('deve usar agoraISO quando occurred_at vier vazio', () => {

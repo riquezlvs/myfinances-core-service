@@ -91,15 +91,9 @@ describe('setupBot — configureBot (identidade do Guará IA)', () => {
 
 
   it('PRETENDER_RESOLVE do arquivo local', () => {
-
-    const { prepararFotoPerfil } = require('../../../src/bot/setupBot');
-
     const preparado = prepararFotoPerfil('./assets/bot-avatar.jpg');
-
     expect(preparado).not.toBeNull();
-
     expect(preparado).toHaveProperty('caminhoResolvido');
-
   });
 
 
