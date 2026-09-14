@@ -7,17 +7,22 @@ import { formatarReal } from '../../utils/formatters';
 import { gerarSparklineMensal, gerarBarraTexto } from '../../utils/sparklines';
 import { buildResumoKeyboard } from '../keyboards/transactionKeyboard';
 import { RODAPE_UX } from '../../config/constants';
+import { mesAnoAtual, rotuloDoMes } from '../../utils/month';
 
 const EMOJI_METODO: Record<string, string> = {
   pix: '💠',
   credit_card: '💳',
   debit_card: '🏧',
+  meal_voucher: '🍽️',
+  food_voucher: '🛒',
 };
 
 const NOME_METODO: Record<string, string> = {
   pix: 'Pix',
   credit_card: 'Cartão de crédito',
   debit_card: 'Cartão de débito',
+  meal_voucher: 'Vale-refeição',
+  food_voucher: 'Vale-alimentação',
 };
 
 /** 8.3 — Ícone de status da meta, igual ao comando /meta. */
@@ -64,7 +69,9 @@ export async function handleResumo(
   const linhasPorMetodo = r.porMetodo.length
     ? r.porMetodo.map((m) => {
         const barra = gerarBarraTexto(m.total, maxTotalMetodo);
-        return `   ${EMOJI_METODO[m.metodo] ?? '💰'} ${NOME_METODO[m.metodo] ?? m.metodo.replace(/_/g, ' ')}: ${barra} R$ ${formatarReal(m.total)}`;
+        const nome = NOME_METODO[m.metodo] ?? m.metodo.replace(/_/g, ' ');
+        const emoji = EMOJI_METODO[m.metodo] ?? '💰';
+        return `   ${emoji} ${nome}: ${barra} R$ ${formatarReal(m.total)}`;
       })
     : ['   (nenhum lançamento no mês)'];
 
@@ -72,29 +79,46 @@ export async function handleResumo(
   // listarMetas já ordena por % usada (estouradas primeiro).
   const linhasMetas = metas.map((m) => {
     const barra = gerarBarraTexto(m.gastoAtual, m.limite);
-    return `${ICONE_NIVEL[m.nivel]} ${m.categoria}: ${barra} R$ ${formatarReal(
+    return `   ${ICONE_NIVEL[m.nivel]} *${m.categoria}*: ${barra} R$ ${formatarReal(
       m.gastoAtual
     )} / R$ ${formatarReal(m.limite)} (${m.percentual.toFixed(0)}%)`;
   });
 
+  const mesFormatado = rotuloDoMes(mesAnoAtual());
+  const mesTitulo = mesFormatado.charAt(0).toUpperCase() + mesFormatado.slice(1);
+
+  const blocos: string[] = [
+    `📊 *Resumo Financeiro — ${mesTitulo}*`,
+    '',
+    '💰 *Visão Geral*',
+    `   • 💸 *Total gasto (sua parte):* R$ ${formatarReal(r.meuGastoReal)}`,
+    `   • 🔁 *Gastos fixos/recorrentes:* R$ ${formatarReal(r.gastosRecorrentes)}`,
+    `   • 🧾 *Lançamentos registrados:* ${r.quantidade}`,
+  ];
+
+  if (r.quantidade > 0 && sparkline) {
+    blocos.push('');
+    blocos.push('📈 *Ritmo de Gastos Diário*');
+    blocos.push(`   \`${sparkline}\``);
+  }
+
+  blocos.push('');
+  blocos.push('💳 *Gastos por Forma de Pagamento*');
+  blocos.push(...linhasPorMetodo);
+
+  if (metas.length > 0) {
+    blocos.push('');
+    blocos.push('🎯 *Acompanhamento de Metas*');
+    blocos.push(...linhasMetas);
+  }
+
+  blocos.push('');
+  blocos.push(RODAPE_UX);
+
   // 8.6 — Teclado dinâmico de navegação: [Ver Gráfico] [Faturas] [Dívidas].
   await bot.sendMessage(
     chatId,
-    [
-      '📊 *Resumo do mês*',
-      '',
-      `💸 Meus gastos reais: R$ ${formatarReal(r.meuGastoReal)}`,
-      `🔁 Recorrentes (minha parte): R$ ${formatarReal(r.gastosRecorrentes)}`,
-      `🧾 Lançamentos no mês: ${r.quantidade}`,
-      '',
-      r.quantidade > 0 ? `📈 Evolução diária:\n${sparkline}` : '',
-      '',
-      '📂 *Por método de pagamento:*',
-      ...linhasPorMetodo,
-      '',
-      ...(metas.length > 0 ? ['🎯 *Metas do mês:*', ...linhasMetas, ''] : []),
-      RODAPE_UX,
-    ].join('\n'),
+    blocos.join('\n'),
     { parse_mode: 'Markdown', reply_markup: buildResumoKeyboard() }
   );
 }

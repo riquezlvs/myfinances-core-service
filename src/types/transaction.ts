@@ -127,6 +127,7 @@ export interface SaldoTerceiro {
   totalMes?: number;
   parcelas?: Array<{
     displayId?: number;
+    descricao?: string;
     valor: number;
     numero?: number;
     total?: number;

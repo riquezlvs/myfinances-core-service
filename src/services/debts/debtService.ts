@@ -29,7 +29,7 @@ export async function getSaldoTerceiros(requestId: string, incluirTotais = false
 
     const { data: dividas, error: erroDividas } = await supabase
       .from('transactions')
-      .select('display_id, third_party_id, third_party_share_amount, installment_number, installment_total, occurred_at, people(name)')
+      .select('display_id, description, third_party_id, third_party_share_amount, installment_number, installment_total, occurred_at, people(name)')
       .gt('third_party_share_amount', 0);
 
     if (erroDividas) throw new Error(`Erro ao buscar dívidas: ${erroDividas.message}`);
@@ -80,6 +80,7 @@ export async function getSaldoTerceiros(requestId: string, incluirTotais = false
             const valor = Math.round((bruto - abatimento) * 100) / 100;
             return {
               displayId: linha.display_id == null ? undefined : Number(linha.display_id),
+              descricao: linha.description ?? undefined,
               valor,
               numero: linha.installment_number == null ? undefined : Number(linha.installment_number),
               total: linha.installment_total == null ? undefined : Number(linha.installment_total),
@@ -103,7 +104,7 @@ export async function getSaldoTerceiros(requestId: string, incluirTotais = false
           saldo.total = total;
           saldo.totalMes = totalMes;
         }
-        if (linhas.some((linha) => linha.installment_total != null)) saldo.parcelas = parcelas;
+        saldo.parcelas = parcelas;
         return saldo;
       })
       .filter((s) => s.valor > 0.009);

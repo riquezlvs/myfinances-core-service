@@ -6,9 +6,9 @@ import { log } from './utils/logger';
 async function main(): Promise<void> {
   const porta = Number(process.env.PORT || 3000);
   const servidorHealthcheck = http.createServer((requisicao, resposta) => {
-    if (requisicao.method === 'GET') {
+    if (requisicao.method === 'GET' || requisicao.method === 'HEAD') {
       resposta.writeHead(200, { 'Content-Type': 'text/plain' });
-      resposta.end('Guará Online');
+      resposta.end(requisicao.method === 'HEAD' ? undefined : 'Guará Online');
       return;
     }
 

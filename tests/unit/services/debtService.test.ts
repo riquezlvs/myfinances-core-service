@@ -59,8 +59,34 @@ describe('getSaldoTerceiros', () => {
     const saldos = await getSaldoTerceiros('req-1');
 
     expect(saldos).toEqual([
-      { nome: 'Irmã', valor: 70 },
-      { nome: 'João', valor: 40 },
+      {
+        nome: 'Irmã',
+        valor: 70,
+        parcelas: [
+          {
+            displayId: undefined,
+            descricao: undefined,
+            valor: 70,
+            numero: undefined,
+            total: undefined,
+            ocorreuEm: undefined,
+          },
+        ],
+      },
+      {
+        nome: 'João',
+        valor: 40,
+        parcelas: [
+          {
+            displayId: undefined,
+            descricao: undefined,
+            valor: 40,
+            numero: undefined,
+            total: undefined,
+            ocorreuEm: undefined,
+          },
+        ],
+      },
     ]);
   });
 

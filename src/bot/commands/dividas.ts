@@ -28,10 +28,11 @@ export async function handleDividas(
     if (s.parcelas?.length) {
       linhasPessoa.push(
         ...s.parcelas.map((parcela) => {
-          const identificador = parcela.numero && parcela.total ? ` (${parcela.numero}/${parcela.total})` : '';
-          const data = parcela.ocorreuEm ? ` · ${formatarDataCurta(parcela.ocorreuEm)}` : '';
-          const id = parcela.displayId ? ` #${parcela.displayId}` : '';
-          return `   └ ${id}${identificador}${data}: R$ ${formatarReal(parcela.valor)}`;
+          const id = parcela.displayId ? `#${parcela.displayId} · ` : '';
+          const data = parcela.ocorreuEm ? `${formatarDataCurta(parcela.ocorreuEm)} · ` : '';
+          const desc = parcela.descricao ? `${parcela.descricao} ` : 'Lançamento ';
+          const identificador = parcela.numero && parcela.total ? `(${parcela.numero}/${parcela.total}) ` : '';
+          return `   └ ${id}${data}${desc}${identificador}— R$ ${formatarReal(parcela.valor)}`;
         })
       );
     }

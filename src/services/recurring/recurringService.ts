@@ -13,7 +13,7 @@ import { log, withTiming } from '../../utils/logger';
  * job rode mais de uma vez no mesmo dia/mês.
  */
 
-interface RecurringTransactionRow {
+export interface RecurringTransactionRow {
   id: string;
   description: string;
   total_amount: number;
@@ -46,6 +46,24 @@ export async function buscarRecorrenciasPendentes(
       .or(`last_generated_month.is.null,last_generated_month.lt.${mesAtual}`);
 
     if (error) throw new Error(`Erro ao buscar recorrências: ${error.message}`);
+    return (data ?? []) as RecurringTransactionRow[];
+  });
+}
+
+/** Busca todas as recorrências ativas de cartão de crédito. */
+export async function buscarRecorrenciasAtivasCredito(
+  requestId: string
+): Promise<RecurringTransactionRow[]> {
+  return withTiming('buscar recorrências ativas de crédito', { requestId }, async () => {
+    const { data, error } = await getSupabaseClient()
+      .from('recurring_transactions')
+      .select(
+        'id, description, total_amount, category_id, payment_method, my_share_amount, third_party_id, day_of_month, last_generated_month'
+      )
+      .eq('is_active', true)
+      .eq('payment_method', 'credit_card');
+
+    if (error) throw new Error(`Erro ao buscar recorrências ativas de crédito: ${error.message}`);
     return (data ?? []) as RecurringTransactionRow[];
   });
 }

@@ -59,8 +59,8 @@ describe('handleResumo — alertas inteligentes de meta (8.3)', () => {
     await handleResumo(999, 'req-1', bot);
 
     const texto = bot.sendMessage.mock.calls[0][1] as string;
-    expect(texto).toContain('📊 *Resumo do mês*');
-    expect(texto).not.toContain('Metas do mês');
+    expect(texto).toContain('📊 *Resumo Financeiro');
+    expect(texto).not.toContain('Acompanhamento de Metas');
     expect(texto).toContain(RODAPE_UX);
 
     // 8.6 — Teclado dinâmico de navegação do resumo.
@@ -81,10 +81,10 @@ describe('handleResumo — alertas inteligentes de meta (8.3)', () => {
     await handleResumo(999, 'req-1', bot);
 
     const texto = bot.sendMessage.mock.calls[0][1] as string;
-    expect(texto).toContain('🎯 *Metas do mês:*');
-    expect(texto).toContain('🔴 Lazer: ██████████ R$ 250,00 / R$ 200,00 (125%)');
-    expect(texto).toContain('🟡 Alimentação: █████████░ R$ 550,00 / R$ 600,00 (92%)');
-    expect(texto).toContain('🟢 Transporte: ██░░░░░░░░ R$ 50,00 / R$ 200,00 (25%)');
+    expect(texto).toContain('🎯 *Acompanhamento de Metas*');
+    expect(texto).toContain('🔴 *Lazer*: ██████████ R$ 250,00 / R$ 200,00 (125%)');
+    expect(texto).toContain('🟡 *Alimentação*: █████████░ R$ 550,00 / R$ 600,00 (92%)');
+    expect(texto).toContain('🟢 *Transporte*: ██░░░░░░░░ R$ 50,00 / R$ 200,00 (25%)');
     expect(texto).toContain(RODAPE_UX);
   });
 
@@ -111,9 +111,9 @@ describe('handleResumo — alertas inteligentes de meta (8.3)', () => {
     await handleResumo(999, 'req-1', bot);
 
     const texto = bot.sendMessage.mock.calls[0][1] as string;
-    expect(texto).toContain('📊 *Resumo do mês*');
-    expect(texto).toContain('💸 Meus gastos reais: R$ 100,00');
-    expect(texto).not.toContain('Metas do mês');
+    expect(texto).toContain('📊 *Resumo Financeiro');
+    expect(texto).toContain('Total gasto (sua parte):* R$ 100,00');
+    expect(texto).not.toContain('Acompanhamento de Metas');
     expect(texto).toContain(RODAPE_UX);
   });
 });
