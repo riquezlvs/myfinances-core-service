@@ -541,3 +541,149 @@ export async function atualizarGastoPorId(
     if (error) throw new Error(`Erro ao atualizar gasto: ${error.message}`);
   });
 }
+
+export interface ItemLoteExtrato {
+  description: string;
+  amount: number;
+  category_id: number;
+  occurred_at: string;
+  installment_number?: number | null;
+  installment_total?: number | null;
+}
+
+export interface ResultadoLoteExtrato {
+  inseridos: Array<{ displayId: number; description: string; amount: number }>;
+  duplicados: Array<{ description: string; amount: number; data: string }>;
+}
+
+/**
+ * Registra um lote de despesas extraídas de um extrato/fatura.
+ * Executa detecção preventiva de duplicidades (mesmo valor, cartão e dia aproximado).
+ */
+export async function registrarLoteExtrato(params: {
+  cardId: string | null;
+  itens: ItemLoteExtrato[];
+  requestId: string;
+}): Promise<ResultadoLoteExtrato> {
+  const { cardId, itens, requestId } = params;
+  return withTiming('registrar lote de extrato', { requestId, totalItens: itens.length }, async () => {
+    const supabase = getSupabaseClient();
+    const inseridos: Array<{ displayId: number; description: string; amount: number }> = [];
+    const duplicados: Array<{ description: string; amount: number; data: string }> = [];
+
+    if (!itens.length) {
+      return { inseridos, duplicados };
+    }
+
+    // Buscar transações existentes no período para evitar duplicidades
+    const datas = itens.map((it) => it.occurred_at.split('T')[0]!).sort();
+    const menorData = datas[0]!;
+    const maiorData = datas[datas.length - 1]!;
+
+    let queryExistentes = supabase
+      .from('transactions')
+      .select('description, total_amount, occurred_at')
+      .gte('occurred_at', `${menorData}T00:00:00`)
+      .lte('occurred_at', `${maiorData}T23:59:59`);
+
+    if (cardId) {
+      queryExistentes = queryExistentes.eq('card_id', cardId);
+    }
+
+    const { data: existentes } = await queryExistentes;
+    const transacoesExistentes = existentes ?? [];
+
+    const ehDuplicado = (item: ItemLoteExtrato): boolean => {
+      const dataItem = item.occurred_at.split('T')[0]!;
+      const descItem = item.description.trim().toLowerCase();
+      return transacoesExistentes.some((ex: any) => {
+        const dataEx = String(ex.occurred_at).split('T')[0]!;
+        const descEx = String(ex.description).trim().toLowerCase();
+        const mesmoValor = Math.abs(Number(ex.total_amount) - item.amount) < 0.01;
+        const mesmaData = dataEx === dataItem;
+        const descParecida = descEx.includes(descItem) || descItem.includes(descEx);
+        return mesmoValor && mesmaData && descParecida;
+      });
+    };
+
+    for (const item of itens) {
+      if (ehDuplicado(item)) {
+        duplicados.push({
+          description: item.description,
+          amount: item.amount,
+          data: item.occurred_at.split('T')[0]!,
+        });
+        continue;
+      }
+
+      const sufixoParcela =
+        item.installment_number && item.installment_total
+          ? ` (${item.installment_number}/${item.installment_total})`
+          : '';
+
+      const { data, error } = await supabase
+        .from('transactions')
+        .insert({
+          description: `${item.description}${sufixoParcela}`,
+          total_amount: item.amount,
+          category_id: item.category_id,
+          payment_method: 'credit_card',
+          card_id: cardId,
+          occurred_at: item.occurred_at,
+          installment_number: item.installment_number ?? null,
+          installment_total: item.installment_total ?? null,
+          raw_input: `[extrato: ${item.description}]`,
+        })
+        .select('display_id')
+        .single();
+
+      if (error) {
+        log('error', 'Erro ao inserir item do extrato', { requestId, erro: error.message, item });
+        continue;
+      }
+
+      if (data?.display_id) {
+        inseridos.push({
+          displayId: data.display_id as number,
+          description: item.description,
+          amount: item.amount,
+        });
+        // Adiciona à lista de existentes em memória para evitar duplicar itens repetidos no próprio extrato
+        transacoesExistentes.push({
+          description: item.description,
+          total_amount: item.amount,
+          occurred_at: item.occurred_at,
+        });
+      }
+    }
+
+    log('info', 'Lote de extrato processado', {
+      requestId,
+      inseridos: inseridos.length,
+      duplicados: duplicados.length,
+    });
+
+    return { inseridos, duplicados };
+  });
+}
+
+/**
+ * Apaga uma lista de IDs de transações (usado para desfazer importação de extrato em bloco).
+ */
+export async function apagarTransacoesPorIds(
+  displayIds: number[],
+  requestId: string
+): Promise<{ apagadas: number[] }> {
+  return withTiming('apagar transações por IDs', { requestId, count: displayIds.length }, async () => {
+    if (!displayIds.length) return { apagadas: [] };
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase
+      .from('transactions')
+      .delete()
+      .in('display_id', displayIds)
+      .select('display_id');
+
+    if (error) throw new Error(`Erro ao apagar lote de transações: ${error.message}`);
+    return { apagadas: (data ?? []).map((d) => d.display_id as number) };
+  });
+}

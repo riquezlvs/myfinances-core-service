@@ -26,6 +26,9 @@ export const SISTEMA_INTENT = `${SISTEMA_BASE} Classifique a intenção da frase
 /** Instrução de sistema para o fluxo multimodal (voz/áudio). */
 export const SISTEMA_AUDIO = `${SISTEMA_BASE} Transcreva o áudio e extraia a intenção e a transação em UMA única resposta JSON.`;
 
+/** Instrução de sistema para OCR e extração estruturada de extrato/fatura (imagem). */
+export const SISTEMA_EXTRATO = `${SISTEMA_BASE} Analise a imagem do extrato ou fatura bancária e extraia com máxima precisão cada despesa, seus valores, datas e parcelamentos no JSON do esquema indicado. Desconsidere totais, saldos consolidados e pagamentos de fatura.`;
+
 /** Instrução de sistema para insights em prosa (insightService). */
 export const SISTEMA_INSIGHT =
   'Você é um assistente financeiro pessoal objetivo e direto. Responda SOMENTE com base nos dados fornecidos pelo sistema: nunca invente números, categorias nem eventos.';
@@ -128,5 +131,31 @@ export function buildInsightPrompt(agregados: string): string {
     '',
     'DADOS DO MÊS (fonte: sistema, não do usuário):',
     agregados,
+  ].join('\n');
+}
+
+/**
+ * Prompt para leitura e extração de faturas/extratos bancários via visão multimodal.
+ */
+export function buildStatementPrompt(agoraISO: string, nomesCartoesCadastrados: string[]): string {
+  const listaCartoes = nomesCartoesCadastrados.length
+    ? `Cartões cadastrados pelo usuário no sistema: ${nomesCartoesCadastrados.join(', ')}.`
+    : 'Nenhum cartão cadastrado previamente.';
+
+  return [
+    `Data e hora atuais de referência: ${agoraISO} (timezone America/Sao_Paulo).`,
+    listaCartoes,
+    '',
+    'Analise a imagem da fatura ou extrato bancário fornecida e extraia:',
+    '1) "card_name_hint": Qual a instituição financeira ou cartão da imagem (ex: "Nubank", "Itaú", "XP", "C6", "Inter", etc.), associando aos cartões cadastrados se compatível.',
+    '2) "statement_date": A data ou competência do extrato (ex: "2026-09" ou "2026-09-10").',
+    '3) "items": Lista de todas as transações de compra/gasto visíveis.',
+    '',
+    'Regras essenciais para extração dos itens:',
+    '  - Valor (amount): No Brasil, vírgula é decimal (ex: 125,50 -> 125.50). Registre o valor da compra ou da parcela listada nesta fatura. Sempre positivo.',
+    '  - Parcelamento: Observe atentamente sufixos ou anotações como "02/10", "3 de 10", "PARC 01/05" ou "(2/4)". Preencha installment_current e installment_total. Se for compra à vista, deixe null.',
+    '  - Datas: Preencha "date" no formato ISO 8601 (YYYY-MM-DD). Se na fatura só constar dia e mês (ex: "15/AGO" ou "03/09"), deduza o ano usando a data de referência.',
+    '  - Pagamentos e Estornos: Se houver linhas como "Pagamento recebido", "Pagamento de fatura", "Crédito em conta" ou estorno, marque is_payment_or_credit = true.',
+    '  - NÃO inclua linhas que representem totais ou resumos (ex: "Total da Fatura", "Saldo Atual", "Limite Disponível", "Subtotal").',
   ].join('\n');
 }

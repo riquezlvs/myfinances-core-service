@@ -3,6 +3,7 @@ import { log } from '../utils/logger';
 import { GEMINI_MODEL } from '../config/constants';
 import { messageHandler } from './handlers/messageHandler';
 import { voiceHandler } from './handlers/voiceHandler';
+import { photoHandler } from './handlers/photoHandler';
 import { callbackQueryHandler } from './handlers/callbackQueryHandler';
 import { setupCommands } from './setupCommands';
 import { configureBot } from './setupBot';
@@ -30,11 +31,18 @@ export async function iniciarBot(): Promise<{ shutdown: () => Promise<void> }> {
     if (mensagemDuplicada(chave)) return;
 
     // Fase 4: voz e áudio vão para o voiceHandler (transcrição multimodal
-    // via Gemini); o messageHandler cuida de texto e do caso "sem texto".
+    // via Gemini); fotos/extratos vão para o photoHandler;
+    // o messageHandler cuida de texto e do caso "sem texto".
     if (msg.voice || msg.audio) {
       void voiceHandler(msg);
       return;
     }
+
+    if (msg.photo && msg.photo.length > 0) {
+      void photoHandler(msg);
+      return;
+    }
+
     void messageHandler(msg);
   });
 

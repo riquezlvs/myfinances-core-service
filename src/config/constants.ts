@@ -16,6 +16,12 @@ export const GEMINI_TIMEOUT_MS = 60_000;
 /** 7.4 — Timeout maior para chamadas multimodais (upload + transcrição). */
 export const GEMINI_AUDIO_TIMEOUT_MS = 90_000;
 
+/** Timeout para chamadas multimodais de imagem (OCR/extratos). */
+export const GEMINI_IMAGE_TIMEOUT_MS = 90_000;
+
+/** Limite máximo de arquivo de imagem (15MB). */
+export const MAX_IMAGE_FILE_SIZE_BYTES = 15 * 1024 * 1024;
+
 /** 7.6 — Tamanho do cache FIFO de deduplicação de mensagens do Telegram. */
 export const MESSAGE_DEDUPE_CACHE_SIZE = 100;
 

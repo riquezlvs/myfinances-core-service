@@ -130,3 +130,16 @@ export function buildViagemKeyboard(): InlineKeyboardMarkup {
     ],
   };
 }
+
+/** Teclado de confirmação de importação de extrato em lote com botão de desfazer tudo. */
+export function buildExtratoKeyboard(displayIds: number[]): InlineKeyboardMarkup {
+  // Se forem muitos IDs, enviamos os primeiros ou identificador do lote para respeitar limite de 64 bytes
+  const idStr = displayIds.join(',');
+  const callbackData = idStr.length <= 50 ? `undl:${idStr}` : `undl:${displayIds[0]}:${displayIds.length}`;
+  return {
+    inline_keyboard: [
+      [{ text: '❌ Desfazer Importação', callback_data: callbackData }],
+      [{ ...BOTON_FATURAS }, { ...BOTON_RESUMO }],
+    ],
+  };
+}

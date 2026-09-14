@@ -79,6 +79,18 @@ export async function callbackQueryHandler(
         break;
       }
 
+      case 'undl': {
+        // Desfaz importação em lote
+        const ids = idStr.includes(',') ? idStr.split(',').map(Number) : [displayId];
+        await withTiming('callback: desfazer lote extrato', { requestId, count: ids.length }, async () => {
+          const { apagarTransacoesPorIds } = await import('../../services/transactions/transactionService');
+          await apagarTransacoesPorIds(ids, requestId);
+        });
+        await bot.deleteMessage(chatId, messageId);
+        await bot.answerCallbackQuery(query.id, { text: '✅ Importação do extrato desfeita com sucesso.' });
+        break;
+      }
+
       case 'catm': {
         const categoryMap = await getCategoryMap(requestId);
         await bot.editMessageReplyMarkup(buildCategoryKeyboard(displayId, categoryMap), {

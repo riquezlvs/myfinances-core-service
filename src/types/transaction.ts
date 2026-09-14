@@ -140,3 +140,21 @@ export type ResultadoPagamento =
   | { status: 'sem_divida'; nome: string }
   | { status: 'quitado'; nome: string; valorPago: number; avisoValorAjustado?: string }
   | { status: 'parcial'; nome: string; valorPago: number; saldoRestante: number; avisoValorAjustado?: string };
+
+/** Item individual de despesa extraído de uma imagem de extrato/fatura. */
+export interface ExtracaoExtratoItem {
+  description: string;
+  amount: number;
+  category_id: number;
+  date: string;
+  installment_current?: number | null;
+  installment_total?: number | null;
+  is_payment_or_credit?: boolean;
+}
+
+/** Resposta estruturada do Gemini ao ler uma foto de fatura/extrato. */
+export interface ExtracaoExtrato {
+  card_name_hint?: string | null;
+  statement_date?: string | null;
+  items: ExtracaoExtratoItem[];
+}

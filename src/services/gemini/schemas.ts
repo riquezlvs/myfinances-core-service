@@ -253,3 +253,73 @@ export function buildPayloadSchema(categoryMap: Record<number, string>) {
     required: ['intent'],
   };
 }
+
+/**
+ * Schema estruturado para OCR e extração de faturas e extratos bancários a partir de imagens.
+ */
+export function buildStatementSchema(categoryMap: Record<number, string>) {
+  return {
+    type: Type.OBJECT,
+    properties: {
+      card_name_hint: {
+        type: Type.STRING,
+        nullable: true,
+        description:
+          'Nome da instituição emissora ou cartão identificado na imagem (ex: "Nubank", "Itaú", "XP", "C6", "Inter"). null se não for possível identificar.',
+      },
+      statement_date: {
+        type: Type.STRING,
+        nullable: true,
+        description:
+          'Mês/ano de referência ou data da fatura/extrato no formato YYYY-MM ou YYYY-MM-DD. null se não identificado.',
+      },
+      items: {
+        type: Type.ARRAY,
+        description: 'Lista de despesas e compras encontradas no extrato.',
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            description: {
+              type: Type.STRING,
+              description: 'Nome do estabelecimento ou serviço comprado (sem prefixos desnecessários).',
+            },
+            amount: {
+              type: Type.NUMBER,
+              description: 'Valor da despesa em reais. Sempre um número positivo.',
+            },
+            category_id: {
+              type: Type.INTEGER,
+              description: `ID da categoria mais aderente: ${Object.entries(categoryMap)
+                .map(([id, name]) => `${id}=${name}`)
+                .join(', ')}.`,
+            },
+            date: {
+              type: Type.STRING,
+              description:
+                'Data da transação em ISO 8601 (YYYY-MM-DD ou YYYY-MM-DDTHH:mm:ss). Se a imagem tiver apenas dia e mês, deduza o ano usando o mês/ano da fatura ou o ano atual.',
+            },
+            installment_current: {
+              type: Type.INTEGER,
+              nullable: true,
+              description:
+                'Número da parcela atual, se for compra parcelada (ex: 3 para "03/10" ou "PARC 3/10"). null se não for parcelado.',
+            },
+            installment_total: {
+              type: Type.INTEGER,
+              nullable: true,
+              description:
+                'Total de parcelas da compra (ex: 10 para "03/10"). null se não for parcelado.',
+            },
+            is_payment_or_credit: {
+              type: Type.BOOLEAN,
+              description:
+                'true se for pagamento da fatura ("pagamento recebido"), crédito ou estorno. false se for compra/gasto regular.',
+            },
+          },
+          required: ['description', 'amount', 'category_id', 'date', 'is_payment_or_credit'],
+        },
+      },
+    },
+    required: ['items'],
+  };
+}
