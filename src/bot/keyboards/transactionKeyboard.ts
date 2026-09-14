@@ -131,17 +131,18 @@ export function buildViagemKeyboard(): InlineKeyboardMarkup {
   };
 }
 
+import { salvarLoteIds } from '../../utils/batchStore';
+
 /** Teclado de confirmação de importação de extrato em lote com botões de ação rápida. */
-export function buildExtratoKeyboard(displayIds: number[]): InlineKeyboardMarkup {
-  const idStr = displayIds.join(',');
-  const callbackSuffix = idStr.length <= 48 ? idStr : `${displayIds[0]}:${displayIds.length}`;
+export function buildExtratoKeyboard(displayIdsOuToken: number[] | string): InlineKeyboardMarkup {
+  const token = typeof displayIdsOuToken === 'string' ? displayIdsOuToken : salvarLoteIds(displayIdsOuToken);
   return {
     inline_keyboard: [
       [
-        { text: '✏️ Mudar Categoria', callback_data: `catl:${callbackSuffix}` },
-        { text: '💳 Alterar Cartão', callback_data: `crdl:${callbackSuffix}` },
+        { text: '✏️ Mudar Categoria', callback_data: `catl:${token}` },
+        { text: '💳 Alterar Cartão', callback_data: `crdl:${token}` },
       ],
-      [{ text: '❌ Desfazer Importação', callback_data: `undl:${callbackSuffix}` }],
+      [{ text: '❌ Desfazer Importação', callback_data: `undl:${token}` }],
       [{ ...BOTON_FATURAS }, { ...BOTON_RESUMO }],
     ],
   };

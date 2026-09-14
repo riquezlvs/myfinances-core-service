@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatarReal, formatarDataCurta, formatarPagamento } from '../../../src/utils/formatters';
+import { formatarReal, formatarDataCurta, formatarPagamento, escaparMarkdown } from '../../../src/utils/formatters';
 import { RODAPE_UX } from '../../../src/config/constants';
 import type { ResultadoPagamento } from '../../../src/types/transaction';
 
@@ -93,5 +93,17 @@ describe('formatarPagamento', () => {
       '✅ Pagamento parcial registrado! Irmã pagou R$ 10,00. Saldo restante: R$ 15,50.\n⚠️ Somente o devido foi registrado.' +
         rodape
     );
+  });
+});
+
+describe('escaparMarkdown', () => {
+  it('deve escapar asteriscos, underscores, crases e colchetes', () => {
+    expect(escaparMarkdown('PG *UBER_TRIP [SP] `teste`')).toBe('PG \\*UBER\\_TRIP \\[SP\\] \\`teste\\`');
+  });
+
+  it('deve lidar com null, undefined ou string vazia', () => {
+    expect(escaparMarkdown(null)).toBe('');
+    expect(escaparMarkdown(undefined)).toBe('');
+    expect(escaparMarkdown('')).toBe('');
   });
 });

@@ -12,8 +12,10 @@ import {
   registrarLoteExtrato,
   type ItemLoteExtrato,
 } from '../../services/transactions/transactionService';
-import { formatarReal, formatarDataCurta } from '../../utils/formatters';
+import { formatarReal, formatarDataCurta, escaparMarkdown } from '../../utils/formatters';
 import { buildExtratoKeyboard } from '../keyboards/transactionKeyboard';
+import { verificarRateLimit, tokensRestantes } from '../../utils/rateLimit';
+import { enqueue } from '../../utils/concurrency';
 
 /**
  * Intercepta imagens enviadas ao bot (ex: fotos ou screenshots de extratos/faturas),
@@ -43,6 +45,20 @@ export async function photoHandler(
     return;
   }
 
+  const chaveRateLimit = `user:${msg.from?.id}`;
+  if (msg.from?.id && !verificarRateLimit(chaveRateLimit)) {
+    log('warn', '🚦 Rate limit excedido (imagem)', {
+      requestId,
+      userId: msg.from.id,
+      restante: tokensRestantes(chaveRateLimit),
+    });
+    await bot.sendMessage(
+      chatId,
+      '🚦 Você está enviando mensagens rápido demais. Dá uma respirada e tenta de novo em alguns segundos! 😅'
+    );
+    return;
+  }
+
   const photos = msg.photo;
   if (!photos || photos.length === 0) {
     await bot.sendMessage(chatId, '⚠️ Não consegui acessar a imagem enviada.');
@@ -60,18 +76,20 @@ export async function photoHandler(
     return;
   }
 
-  try {
-    await bot.sendChatAction(chatId, 'typing');
+  const chaveFila = `chat:${chatId}`;
+  await enqueue(chaveFila, async () => {
+    try {
+      await bot.sendChatAction(chatId, 'typing');
 
-    // 1) Link temporário do arquivo no servidor do Telegram
-    const link = await bot.getFileLink(maiorFoto.file_id);
+      // 1) Link temporário do arquivo no servidor do Telegram
+      const link = await bot.getFileLink(maiorFoto.file_id);
 
-    // 2) Download da imagem para buffer em memória
-    const response = await fetch(link, { signal: AbortSignal.timeout(30_000) });
-    if (!response.ok) {
-      throw new Error(`Download da imagem falhou (HTTP ${response.status}).`);
-    }
-    const buffer = Buffer.from(await response.arrayBuffer());
+      // 2) Download da imagem para buffer em memória
+      const response = await fetch(link, { signal: AbortSignal.timeout(30_000) });
+      if (!response.ok) {
+        throw new Error(`Download da imagem falhou (HTTP ${response.status}).`);
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
 
     // Captura legenda/comentário enviado junto com a imagem (ex: "Fatura Viagem Rio", "Nubank Setembro")
     const legenda = msg.caption?.trim() || undefined;
@@ -125,8 +143,8 @@ export async function photoHandler(
     });
 
     const totalRegistrado = resultadoLote.inseridos.reduce((soma, i) => soma + i.amount, 0);
-    const cartaoLabel = cartaoEscolhido ? `💳 *Cartão:* ${cartaoEscolhido.name}` : '💳 *Método:* Cartão de crédito';
-    const tituloExtrato = legenda ? `📄 *Extrato processado — "${legenda}"*` : '📄 *Extrato processado com sucesso!*';
+    const cartaoLabel = cartaoEscolhido ? `💳 *Cartão:* ${escaparMarkdown(cartaoEscolhido.name)}` : '💳 *Método:* Cartão de crédito';
+    const tituloExtrato = legenda ? `📄 *Extrato processado — "${escaparMarkdown(legenda)}"*` : '📄 *Extrato processado com sucesso!*';
 
     const linhasMsg: string[] = [
       tituloExtrato,
@@ -139,7 +157,7 @@ export async function photoHandler(
       linhasMsg.push('');
       linhasMsg.push('*Lançamentos:*');
       for (const item of resultadoLote.inseridos.slice(0, 10)) {
-        linhasMsg.push(`   • #${item.displayId} · ${item.description} — R$ ${formatarReal(item.amount)}`);
+        linhasMsg.push(`   • #${item.displayId} · ${escaparMarkdown(item.description)} — R$ ${formatarReal(item.amount)}`);
       }
       if (resultadoLote.inseridos.length > 10) {
         linhasMsg.push(`   • ...e mais ${resultadoLote.inseridos.length - 10} compras.`);
@@ -150,7 +168,7 @@ export async function photoHandler(
       linhasMsg.push('');
       linhasMsg.push(`⚠️ *Ignorados por duplicidade (${resultadoLote.duplicados.length}):*`);
       for (const dup of resultadoLote.duplicados.slice(0, 5)) {
-        linhasMsg.push(`   • ${dup.description} (R$ ${formatarReal(dup.amount)}) em ${formatarDataCurta(dup.data)}`);
+        linhasMsg.push(`   • ${escaparMarkdown(dup.description)} (R$ ${formatarReal(dup.amount)}) em ${formatarDataCurta(dup.data)}`);
       }
       if (resultadoLote.duplicados.length > 5) {
         linhasMsg.push(`   • ...e outros ${resultadoLote.duplicados.length - 5} já existentes.`);
@@ -176,4 +194,5 @@ export async function photoHandler(
       '❌ Não consegui processar a imagem do extrato. Verifique se a foto está legível e tente novamente 🙂'
     );
   }
+  });
 }

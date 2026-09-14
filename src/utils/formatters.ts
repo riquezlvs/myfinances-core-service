@@ -19,6 +19,12 @@ export function formatarDataCurta(iso: string): string {
   return `${dia}/${mes}`;
 }
 
+/** Escapa caracteres reservados do Markdown clássico do Telegram (*, _, `, [). */
+export function escaparMarkdown(texto?: string | null): string {
+  if (!texto) return '';
+  return texto.replace(/([*_`\[\]])/g, '\\$1');
+}
+
 const LABEL_METODO: Record<PaymentMethod, string> = {
   pix: 'Pix',
   credit_card: 'Cartão de crédito',

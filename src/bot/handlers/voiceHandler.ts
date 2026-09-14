@@ -7,6 +7,8 @@ import { AUTHORIZED_USER_ID } from '../../config/env';
 import { MAX_AUDIO_DURATION_SECONDS } from '../../config/constants';
 import { interpretarAudio } from '../../services/gemini/audioParser';
 import { registrarEResponderGasto } from './novoGasto';
+import { verificarRateLimit, tokensRestantes } from '../../utils/rateLimit';
+import { enqueue } from '../../utils/concurrency';
 
 /**
  * Fase 4 — Processamento de Áudio (Voice-to-Text).
@@ -37,6 +39,20 @@ export async function voiceHandler(
     return;
   }
 
+  const chaveRateLimit = `user:${msg.from.id}`;
+  if (!verificarRateLimit(chaveRateLimit)) {
+    log('warn', '🚦 Rate limit excedido (áudio)', {
+      requestId,
+      userId: msg.from.id,
+      restante: tokensRestantes(chaveRateLimit),
+    });
+    await bot.sendMessage(
+      chatId,
+      '🚦 Você está enviando mensagens rápido demais. Dá uma respirada e tenta de novo em alguns segundos! 😅'
+    );
+    return;
+  }
+
   const audio = msg.voice ?? msg.audio;
   if (!audio) {
     await bot.sendMessage(chatId, '⚠️ Só consigo processar mensagens de voz ou áudio.');
@@ -63,59 +79,62 @@ export async function voiceHandler(
     return;
   }
 
-  try {
-    await bot.sendChatAction(chatId, 'typing');
+  const chaveFila = `chat:${chatId}`;
+  await enqueue(chaveFila, async () => {
+    try {
+      await bot.sendChatAction(chatId, 'typing');
 
-    // 1) Link temporário do arquivo no servidor do Telegram.
-    const link = await bot.getFileLink(audio.file_id);
+      // 1) Link temporário do arquivo no servidor do Telegram.
+      const link = await bot.getFileLink(audio.file_id);
 
-    // 2) Download do OGG para memória (sem arquivos temporários em disco).
-    // Timeout de 30s: evita promise pendurada eternamente se o CDN travar.
-    const response = await fetch(link, { signal: AbortSignal.timeout(30_000) });
-    if (!response.ok) {
-      throw new Error(`Download do áudio falhou (HTTP ${response.status}).`);
-    }
-    const buffer = Buffer.from(await response.arrayBuffer());
+      // 2) Download do OGG para memória (sem arquivos temporários em disco).
+      // Timeout de 30s: evita promise pendurada eternamente se o CDN travar.
+      const response = await fetch(link, { signal: AbortSignal.timeout(30_000) });
+      if (!response.ok) {
+        throw new Error(`Download do áudio falhou (HTTP ${response.status}).`);
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
 
-    // 3) Transcrição + intenção + extração em uma única chamada multimodal.
-    const extracao = await interpretarAudio(buffer, audio.mime_type ?? 'audio/ogg', requestId);
-    log('info', 'Áudio processado pelo Gemini', {
-      requestId,
-      intent: extracao.intent,
-      transcricao: extracao.transcricao,
-    });
-
-    // 4) Roteia pelo mesmo fluxo do chat em texto.
-    if (extracao.intent === 'NOVO_GASTO' && extracao.transaction) {
-      await registrarEResponderGasto(
-        chatId,
-        extracao.transaction,
-        `[áudio] ${extracao.transcricao}`,
+      // 3) Transcrição + intenção + extração em uma única chamada multimodal.
+      const extracao = await interpretarAudio(buffer, audio.mime_type ?? 'audio/ogg', requestId);
+      log('info', 'Áudio processado pelo Gemini', {
         requestId,
-        bot,
-        extracao.avisos
-      );
-      return;
-    }
+        intent: extracao.intent,
+        transcricao: extracao.transcricao,
+      });
 
-    // Intenções não-suportadas por áudio: mostra a transcrição e orienta.
-    await bot.sendMessage(
-      chatId,
-      [
-        `🎙️ Transcrição: "${extracao.transcricao}"`,
-        '',
-        'Por enquanto, registro de gastos por áudio é o que consigo fazer sozinho. ' +
-          'Para pagamentos e consultas, me mande por texto (ex: "minha irmã pagou 25 reais" ou /resumo).',
-      ].join('\n')
-    );
-  } catch (err) {
-    const mensagemErro = err instanceof Error ? err.message : String(err);
-    log('error', '❌ Falha no processamento do áudio', { requestId, erro: mensagemErro });
-    // Não expõe detalhes internos ao usuário; a causa fica no log (requestId).
-    await bot.sendMessage(
-      chatId,
-      '❌ Não consegui processar seu áudio. Tente novamente — se o problema persistir, ' +
-        'mande o gasto em texto (requestId no log para referência).'
-    );
-  }
+      // 4) Roteia pelo mesmo fluxo do chat em texto.
+      if (extracao.intent === 'NOVO_GASTO' && extracao.transaction) {
+        await registrarEResponderGasto(
+          chatId,
+          extracao.transaction,
+          `[áudio] ${extracao.transcricao}`,
+          requestId,
+          bot,
+          extracao.avisos
+        );
+        return;
+      }
+
+      // Intenções não-suportadas por áudio: mostra a transcrição e orienta.
+      await bot.sendMessage(
+        chatId,
+        [
+          `🎙️ Transcrição: "${extracao.transcricao}"`,
+          '',
+          'Por enquanto, registro de gastos por áudio é o que consigo fazer sozinho. ' +
+            'Para pagamentos e consultas, me mande por texto (ex: "minha irmã pagou 25 reais" ou /resumo).',
+        ].join('\n')
+      );
+    } catch (err) {
+      const mensagemErro = err instanceof Error ? err.message : String(err);
+      log('error', '❌ Falha no processamento do áudio', { requestId, erro: mensagemErro });
+      // Não expõe detalhes internos ao usuário; a causa fica no log (requestId).
+      await bot.sendMessage(
+        chatId,
+        '❌ Não consegui processar seu áudio. Tente novamente — se o problema persistir, ' +
+          'mande o gasto em texto (requestId no log para referência).'
+      );
+    }
+  });
 }

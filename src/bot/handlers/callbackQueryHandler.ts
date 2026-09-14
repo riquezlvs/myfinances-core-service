@@ -212,22 +212,14 @@ async function manipularNavegacao(
   await bot.answerCallbackQuery(query.id, { text: '✅ Pronto!' });
 }
 
+import { obterLoteIds } from '../../utils/batchStore';
+
 /**
  * Resolve displayIds a partir do sufixo do callback de lote.
- * Suporta lista separada por vírgula ("10,11,12") ou prefixo com tamanho ("10:3").
+ * Suporta tokens do batchStore ("a1b2c3d4") e listas legadas.
  */
 function extrairDisplayIdsDeLote(sufixo: string): number[] {
-  if (sufixo.includes(',')) {
-    return sufixo.split(',').map(Number).filter(Number.isFinite);
-  }
-  if (sufixo.includes(':')) {
-    const [inicial, qtd] = sufixo.split(':').map(Number);
-    if (Number.isFinite(inicial) && Number.isFinite(qtd)) {
-      return Array.from({ length: qtd }, (_, i) => inicial + i);
-    }
-  }
-  const idUnico = Number(sufixo);
-  return Number.isFinite(idUnico) ? [idUnico] : [];
+  return obterLoteIds(sufixo);
 }
 
 /**
@@ -286,7 +278,7 @@ async function manipularAcoesLoteExtrato(
       const nomeCategoria = categoryMap[categoryId] ?? 'desconhecida';
 
       await atualizarCategoriaEmLote(ids, categoryId, requestId);
-      await bot.editMessageReplyMarkup(buildExtratoKeyboard(ids), {
+      await bot.editMessageReplyMarkup(buildExtratoKeyboard(sufixo), {
         chat_id: chatId,
         message_id: messageId,
       });
@@ -305,7 +297,7 @@ async function manipularAcoesLoteExtrato(
       const nomeCartao = cartao?.name ?? 'Cartão';
 
       await atualizarCartaoEmLote(ids, cardId, requestId);
-      await bot.editMessageReplyMarkup(buildExtratoKeyboard(ids), {
+      await bot.editMessageReplyMarkup(buildExtratoKeyboard(sufixo), {
         chat_id: chatId,
         message_id: messageId,
       });
@@ -317,8 +309,7 @@ async function manipularAcoesLoteExtrato(
 
     case 'backl': {
       const sufixo = partes.slice(1).join(':');
-      const ids = extrairDisplayIdsDeLote(sufixo);
-      await bot.editMessageReplyMarkup(buildExtratoKeyboard(ids), {
+      await bot.editMessageReplyMarkup(buildExtratoKeyboard(sufixo), {
         chat_id: chatId,
         message_id: messageId,
       });
