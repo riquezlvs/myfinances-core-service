@@ -19,9 +19,47 @@ import { mensagemDuplicada } from '../utils/dedupe';
 export async function iniciarBot(): Promise<{ shutdown: () => Promise<void> }> {
   const bot = getTelegramBot();
 
-  // Bot: configura identidade (nome, descrição, foto) antes de escutar.
-  await configureBot(bot);
+  // 1. Limpeza defensiva de webhook: se algum webhook estiver configurado na API do Telegram,
+  // o Telegram bloqueia completamente o long polling (getUpdates) retornando erro 409 Conflict.
+  try {
+    const webhookInfo = await bot.getWebHookInfo();
+    if (webhookInfo?.url) {
+      log('warn', `⚠️ Webhook ativo detectado em "${webhookInfo.url}". Removendo para habilitar long polling...`);
+      await bot.deleteWebHook();
+      log('info', '✅ Webhook removido com sucesso!');
+    } else {
+      log('info', 'ℹ️ Nenhum webhook ativo no Telegram. Polling desimpedido.');
+    }
+  } catch (err) {
+    log('warn', 'Aviso ao consultar/limpar webhook do Telegram', {
+      erro: err instanceof Error ? err.message : String(err),
+    });
+  }
 
+  // 2. Identifica o bot autenticado (username e ID) para auditoria nos logs.
+  let botUsername = 'desconhecido';
+  try {
+    const me = await bot.getMe();
+    botUsername = me.username ? `@${me.username}` : `id:${me.id}`;
+    log('info', `🤖 Bot autenticado no Telegram: ${botUsername} ("${me.first_name}", ID: ${me.id})`);
+  } catch (err) {
+    log('warn', 'Aviso ao consultar identidade do bot via getMe', {
+      erro: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // 3. Registra listeners de erro antes de qualquer tráfego.
+  bot.on('polling_error', (error) => {
+    log('error', '⚠️ Erro de polling do Telegram', { erro: error.message });
+  });
+  bot.on('webhook_error', (error) => {
+    log('error', '⚠️ Erro de webhook do Telegram', { erro: error.message });
+  });
+  bot.on('error', (error) => {
+    log('error', '⚠️ Erro geral do bot do Telegram', { erro: error.message });
+  });
+
+  // 4. Registra listeners de mensagens e callbacks.
   bot.on('message', (msg) => {
     // Fase 8: dedupe FIFO — reentregas do Telegram não podem disparar duas
     // chamadas ao Gemini nem dois lançamentos no Supabase. Chave baseada em
@@ -50,18 +88,23 @@ export async function iniciarBot(): Promise<{ shutdown: () => Promise<void> }> {
     void callbackQueryHandler(query);
   });
 
-  bot.on('polling_error', (error) => {
-    log('error', '⚠️ Erro de polling do Telegram', { erro: error.message });
-  });
-
+  // 5. Configura identidade (nome, descrição, foto) e menu de comandos.
+  await configureBot(bot);
   await setupCommands();
 
-  // Fase 3: cron diário que materializa as despesas recorrentes do dia.
+  // 6. Inicia os crons internos (recorrências diárias + lembrete mensal proativo).
   const cronRecorrencias = iniciarCronRecorrencias();
-  // Fase 6: cron proativo de lembrete mensal (fatura + dívidas).
   const cronLembrete = iniciarCronLembreteMensal();
 
-  log('info', '🚀 Bot iniciado e escutando mensagens via long polling...', { modelo: GEMINI_MODEL });
+  // 7. Inicia o long polling agora que todos os listeners e limpezas estão prontos.
+  if (!bot.isPolling()) {
+    await bot.startPolling();
+  }
+
+  log('info', '🚀 Bot iniciado e escutando mensagens via long polling...', {
+    bot: botUsername,
+    modelo: GEMINI_MODEL,
+  });
 
   /**
    * Fase 6 — Graceful shutdown: para os crons, encerra o polling do

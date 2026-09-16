@@ -6,14 +6,26 @@ import { log } from './utils/logger';
 async function main(): Promise<void> {
   const porta = Number(process.env.PORT || 3000);
   const servidorHealthcheck = http.createServer((requisicao, resposta) => {
-    if (requisicao.method === 'GET' || requisicao.method === 'HEAD') {
-      resposta.writeHead(200, { 'Content-Type': 'text/plain' });
-      resposta.end(requisicao.method === 'HEAD' ? undefined : 'Guará Online');
+    const metodo = requisicao.method ?? 'GET';
+    const url = requisicao.url ?? '/';
+
+    // Log para auditoria de tráfego HTTP no Render (ex: tentativas de webhook ou acessos web)
+    if (metodo !== 'HEAD') {
+      log('info', `🌐 Requisição HTTP recebida: ${metodo} ${url}`);
+    }
+
+    if (metodo === 'GET' || metodo === 'HEAD') {
+      resposta.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      resposta.end(
+        metodo === 'HEAD'
+          ? undefined
+          : 'Guará IA Online 🚀 O bot opera diretamente no Telegram! Envie mensagens ou o comando /start pelo aplicativo do Telegram.'
+      );
       return;
     }
 
-    resposta.writeHead(405, { 'Content-Type': 'text/plain' });
-    resposta.end('Método não permitido');
+    resposta.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
+    resposta.end('Método não permitido. O bot escuta mensagens via Telegram Bot API.');
   });
 
   await new Promise<void>((resolve, reject) => {

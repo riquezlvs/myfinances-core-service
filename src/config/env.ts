@@ -32,7 +32,12 @@ export {
   supabaseServiceRoleKey as SUPABASE_SERVICE_ROLE_KEY,
   geminiApiKey as GEMINI_API_KEY,
 };
-export const AUTHORIZED_USER_ID = Number(authorizedUserId);
+const cleanAuthorizedUserId = (authorizedUserId ?? '').replace(/['"]/g, '').trim();
+const parsedUserId = Number(cleanAuthorizedUserId);
+if (isNaN(parsedUserId) || parsedUserId <= 0) {
+  throw new Error(`❌ TELEGRAM_AUTHORIZED_USER_ID inválido: "${authorizedUserId}". Deve ser um ID numérico.`);
+}
+export const AUTHORIZED_USER_ID = parsedUserId;
 
 /** Nome exibido do bot no Telegram (padrão: "Guará IA"). */
 export const BOT_NAME = botName;
