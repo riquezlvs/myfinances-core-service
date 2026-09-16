@@ -55,7 +55,8 @@ const transactionShapeSchema = z.object({
     .enum(['pix', 'credit_card', 'debit_card', 'meal_voucher', 'food_voucher'], {
       message: 'Método de pagamento inválido.',
     })
-    .nullable(),
+    .nullable()
+    .optional(),
   occurred_at: z.string({ message: 'Data inválida.' }),
   my_share_amount: z
     .number({ message: 'my_share_amount não é um número finito.' })
@@ -91,6 +92,8 @@ const transactionShapeSchema = z.object({
     .max(MAX_INSTALLMENTS, { message: `Máximo ${MAX_INSTALLMENTS} parcelas permitidas.` })
     .nullable()
     .optional(),
+  entry_type: z.enum(['expense', 'income', 'yield', 'transfer']).nullable().optional(),
+  account_name: z.string().trim().nullable().optional(),
 });
 
 /** Chaves que o schema conhece; qualquer outra é descartada (e logada). */
@@ -102,7 +105,10 @@ const CHAVES_CONHECIDAS = [
   'occurred_at',
   'my_share_amount',
   'third_party_name',
+  'third_party_names',
   'installment_total',
+  'entry_type',
+  'account_name',
 ];
 
 function chavesDesconhecidas(raw: unknown): string[] {
@@ -231,12 +237,14 @@ export function validarTransacao(
       description: candidata.description,
       total_amount: candidata.total_amount,
       category_id: candidata.category_id,
-      payment_method: candidata.payment_method,
+      payment_method: candidata.payment_method ?? null,
       occurred_at: occurredAt,
       my_share_amount: candidata.my_share_amount ?? null,
       third_party_name: candidata.third_party_name ?? null,
       third_party_names: candidata.third_party_names ?? undefined,
       installment_total: installmentTotal,
+      entry_type: candidata.entry_type ?? undefined,
+      account_name: candidata.account_name ?? undefined,
     },
     warnings,
     camposDescartados,

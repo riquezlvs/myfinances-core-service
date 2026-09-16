@@ -30,12 +30,17 @@ import { handleCartao } from '../commands/cartao';
 import { handlePoupanca } from '../commands/poupanca';
 import { handleStatus } from '../commands/status';
 import { handleViagem } from '../commands/viagem';
+import { handlePatrimonio } from '../commands/patrimonio';
+import { handleSaldo } from '../commands/saldo';
+import { handleAjustarSaldo } from '../commands/ajustarSaldo';
+import { handleInvestimentos } from '../commands/investimentos';
 import { getCategoryMap } from '../../services/categories/categoryCache';
 import { enqueue } from '../../utils/concurrency';
 import { verificarRateLimit, tokensRestantes } from '../../utils/rateLimit';
 import {
   consultarGastosGranulares,
   atualizarGastoPorId,
+  registrarEntrada,
   type ResultadoConsultaGranular,
 } from '../../services/transactions/transactionService';
 import { mesAnoNaJanela, mesAnoAtual, rotuloDoMes } from '../../utils/month';
@@ -49,6 +54,7 @@ import type { Intent, IntentParams, IntentPayload, ParsedTransaction } from '../
  */
 const ROTAS_POR_INTENT: Record<Intent, string> = {
   NOVO_GASTO: 'novoGasto',
+  NOVA_ENTRADA: 'novaEntrada',
   PAGAMENTO_DIVIDA: 'pagamentoDivida',
   CONSULTA: 'consulta',
   EXPORTAR: 'exportarViaIA',
@@ -58,6 +64,10 @@ const ROTAS_POR_INTENT: Record<Intent, string> = {
   GRAFICO: 'grafico',
   INSIGHT: 'insight',
   POUPANCA: 'poupancaViaIA',
+  PATRIMONIO: 'patrimonioViaIA',
+  INVESTIMENTOS: 'investimentosViaIA',
+  AJUSTAR_SALDO: 'ajustarSaldoViaIA',
+  TRANSFERENCIA: 'transferenciaViaIA',
   CONFIRMACAO_REQUERIDA: 'confirmacaoRequerida',
   OUTROS: 'outros',
 };
@@ -85,6 +95,49 @@ async function handleNovoGasto(
   // Salvamento + confirmação com botões vivem em novoGasto.ts, compartilhados
   // com o fluxo de áudio (voiceHandler) para garantir UX idêntica.
   await registrarEResponderGasto(chatId, transaction, rawInput, requestId, bot, avisos);
+}
+
+/**
+ * NOVA_ENTRADA — Registra uma receita ou recarga (salário, VR, freela, pix recebido).
+ */
+async function handleNovaEntrada(
+  chatId: number,
+  transaction: ParsedTransaction,
+  avisos: string[],
+  rawInput: string,
+  requestId: string,
+  bot: TelegramBot
+): Promise<void> {
+  log('info', 'Entrada estruturada e validada', { requestId, transaction });
+
+  const res = await registrarEntrada(
+    {
+      description: transaction.description,
+      total_amount: transaction.total_amount,
+      account_name: transaction.account_name ?? null,
+      occurred_at: transaction.occurred_at,
+    },
+    rawInput,
+    requestId
+  );
+
+  const saldoMsg =
+    res.novoSaldo !== undefined
+      ? `\n💳 Novo saldo em *${res.accountName}*: R$ ${formatarReal(res.novoSaldo)}`
+      : '';
+
+  const avisoMsg = avisos.length > 0 ? `\n⚠️ _${avisos.join(', ')}_` : '';
+
+  await bot.sendMessage(
+    chatId,
+    `💰 *Entrada registrada com sucesso!*\n\n` +
+      `• Descrição: ${transaction.description}\n` +
+      `• Valor: *R$ ${formatarReal(transaction.total_amount)}*\n` +
+      `• Conta: *${res.accountName}*` +
+      saldoMsg +
+      avisoMsg,
+    { parse_mode: 'Markdown' }
+  );
 }
 
 async function handlePagamentoDivida(
@@ -272,6 +325,15 @@ async function handleConsulta(
       return;
     case 'gastos':
       await handleGastos(chatId, params.limite ?? 5, requestId, bot);
+      return;
+    case 'patrimonio':
+      await handlePatrimonio(chatId, requestId, bot);
+      return;
+    case 'saldo':
+      await handleSaldo(chatId, requestId, bot);
+      return;
+    case 'investimentos':
+      await handleInvestimentos(chatId, requestId, bot);
       return;
     default:
       await bot.sendMessage(
@@ -665,6 +727,27 @@ async function rotearComando(
     await handleViagem(chatId, argumentos, requestId, bot);
     return true;
   }
+  if (texto.startsWith('/patrimonio')) {
+    log('info', 'Comando: /patrimonio', { requestId });
+    await handlePatrimonio(chatId, requestId, bot);
+    return true;
+  }
+  if (texto.startsWith('/saldo')) {
+    log('info', 'Comando: /saldo', { requestId });
+    await handleSaldo(chatId, requestId, bot);
+    return true;
+  }
+  if (texto.startsWith('/investimentos')) {
+    log('info', 'Comando: /investimentos', { requestId });
+    await handleInvestimentos(chatId, requestId, bot);
+    return true;
+  }
+  if (texto.startsWith('/ajustar_saldo')) {
+    log('info', 'Comando: /ajustar_saldo', { requestId });
+    const argumentos = texto.replace(/^\/ajustar_saldo/i, '').trim();
+    await handleAjustarSaldo(chatId, argumentos, requestId, bot);
+    return true;
+  }
   if (texto.startsWith('/')) {
     log('warn', 'Comando não reconhecido', { requestId, texto });
     await bot.sendMessage(chatId, '❓ Comando não reconhecido. Use /start para ver os comandos disponíveis.');
@@ -802,6 +885,26 @@ async function processarMensagemAutorizada(
       case 'POUPANCA':
         await handlePoupancaViaIA(chatId, payload.params, requestId, bot);
         break;
+      case 'NOVA_ENTRADA': {
+        if (!payload.transaction) {
+          log('warn', 'NOVA_ENTRADA sem transaction no payload; tratando como OUTROS', { requestId });
+          await handleOutros(chatId, bot);
+          break;
+        }
+        await handleNovaEntrada(chatId, payload.transaction, payload.avisos, texto, requestId, bot);
+        break;
+      }
+      case 'PATRIMONIO':
+        await handlePatrimonio(chatId, requestId, bot);
+        break;
+      case 'INVESTIMENTOS':
+        await handleInvestimentos(chatId, requestId, bot);
+        break;
+      case 'AJUSTAR_SALDO': {
+        const argStr = `${payload.params.nomeConta ?? ''} ${payload.params.saldoAjuste ?? ''}`.trim();
+        await handleAjustarSaldo(chatId, argStr, requestId, bot);
+        break;
+      }
       case 'CONFIRMACAO_REQUERIDA':
         await handleConfirmacaoRequerida(chatId, payload.params, bot);
         break;

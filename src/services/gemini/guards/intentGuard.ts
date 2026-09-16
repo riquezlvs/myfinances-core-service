@@ -13,6 +13,7 @@ import type { Intent, IntentParams, IntentPayload, ParsedTransaction } from '../
 /** Enum canônico de intenções que o bot sabe executar. */
 export const INTENT_VALUES: readonly Intent[] = [
   'NOVO_GASTO',
+  'NOVA_ENTRADA',
   'PAGAMENTO_DIVIDA',
   'CONSULTA',
   'EXPORTAR',
@@ -22,6 +23,10 @@ export const INTENT_VALUES: readonly Intent[] = [
   'GRAFICO',
   'INSIGHT',
   'POUPANCA',
+  'PATRIMONIO',
+  'INVESTIMENTOS',
+  'AJUSTAR_SALDO',
+  'TRANSFERENCIA',
   'CONFIRMACAO_REQUERIDA',
   'OUTROS',
 ];
@@ -54,11 +59,20 @@ const CHAVES_PARAMS = [
   'valorPoupanca',
   'prazoPoupanca',
   'pedidoDescricao',
+  'nomeConta',
+  'saldoAjuste',
+  'cdiRate',
+  'tipoConta',
+  'ticker',
+  'quantidadeAtivo',
+  'precoMedioAtivo',
+  'contaOrigem',
+  'contaDestino',
 ];
 
 const paramsSchema = z
   .object({
-    entidade: z.enum(['resumo', 'fatura', 'dividas', 'gastos']).optional(),
+    entidade: z.enum(['resumo', 'fatura', 'dividas', 'gastos', 'entradas', 'patrimonio', 'saldo', 'investimentos']).optional(),
     month: z
       .string()
       .regex(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'Mês com formato inválido (esperado YYYY-MM).' })
@@ -67,7 +81,7 @@ const paramsSchema = z
     // 8.4 — CONSULTA granular: a IA só sugere o NOME da categoria; a
     // resolução para category_id acontece em código (catálogo do Supabase).
     category: z.string().trim().min(1).max(60).optional(),
-    type: z.enum(['gasto']).optional(),
+    type: z.enum(['gasto', 'entrada', 'tudo']).optional(),
     tipoExport: z.enum(['gastos', 'dividas']).optional(),
     accionMeta: z.enum(['listar', 'definir', 'remover']).optional(),
     categoriaMeta: z.string().trim().min(1).max(60).optional(),
@@ -85,6 +99,17 @@ const paramsSchema = z
       .regex(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'Prazo com formato inválido (esperado AAAA-MM).' })
       .optional(),
     pedidoDescricao: z.string().trim().min(1).max(300).optional(),
+
+    // Fase 11: Contas, Entradas e Investimentos
+    nomeConta: z.string().trim().min(1).max(60).optional(),
+    saldoAjuste: z.number().finite().optional(),
+    cdiRate: z.number().finite().positive().max(1000).optional(),
+    tipoConta: z.enum(['checking', 'benefit', 'fixed_income', 'investment_broker']).optional(),
+    ticker: z.string().trim().min(1).max(20).optional(),
+    quantidadeAtivo: z.number().finite().positive().optional(),
+    precoMedioAtivo: z.number().finite().positive().optional(),
+    contaOrigem: z.string().trim().min(1).max(60).optional(),
+    contaDestino: z.string().trim().min(1).max(60).optional(),
   })
   .strip();
 

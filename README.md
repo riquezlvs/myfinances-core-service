@@ -11,6 +11,9 @@ O MyFinances permite registrar gastos, consultar resumos, dividir contas, criar 
 **Exemplo de uso:**
 ```
 "Gastei 45 reais no almoço"           → registra gasto automaticamente
+"Caiu 800 de VR hoje"                 → registra entrada e credita saldo pré-pago
+"Recebi 5000 de salário no Nubank"    → registra receita e atualiza saldo bancário
+"Qual meu patrimônio total?"          → visão consolidada de contas, caixinhas e ações
 "Quanto gastei com transporte mês passado?" → consulta granular
 "Jantar de 120 dividido em 3 com Maria e João" → split de contas
 "Quero juntar 5000 para viagem até dezembro" → meta de poupança
@@ -27,6 +30,7 @@ O MyFinances permite registrar gastos, consultar resumos, dividir contas, criar 
 | Bot | node-telegram-bot-api |
 | Banco de dados | PostgreSQL via Supabase (RLS habilitado) |
 | IA | Gemini 3.5-flash (Google AI Studio) |
+| Dados de Mercado | API do Banco Central do Brasil (SGS CDI diário) & Brapi/Yahoo Finance |
 | Validação | Zod (runtime type checking) |
 | Testes | Vitest |
 
@@ -35,11 +39,16 @@ O MyFinances permite registrar gastos, consultar resumos, dividir contas, criar 
 ## Funcionalidades
 
 ### Principais
-- **Registro por linguagem natural**: "Gastei 30 no mercado" → transação categorizada e validada
-- **Consultas granulares**: "Quanto gastei com lazer em agosto?" → resposta determinística
-- **Exportação CSV**: `/exportar` ou "manda a planilha de setembro"
-- **Metas de orçamento**: alertas automáticos em 80% (🟡) e 100% (🔴)
-- **Insights preditivos**: análise IA com projeção de fechamento do mês
+- **Registro de Entradas & Saldos**: Salários, recargas de benefícios (VR/VA), freelas e PIX recebidos alimentam o saldo real da conta indicada.
+- **Patrimônio Consolidado**: Visão geral de Ativos Líquidos, Benefícios (VR/VA), Caixinhas (% CDI) e Renda Variável, descontando faturas abertas.
+- **Modelo Híbrido Safe-to-Spend**: Saldo Real em conta vs Saldo Livre para gastar (descontando faturas de cartão de crédito em aberto).
+- **Caixinhas com Rendimento Automático (% CDI)**: Integração com API oficial do Banco Central (SGS Série 12), projeção de dias úteis e alíquotas regressivas de IR (22,5% a 15%) e IOF.
+- **Renda Variável a Mercado**: Ações, FIIs e Criptos por ticker com cotação pública em tempo real e rentabilidade sobre o preço médio.
+- **Registro de Gastos por Linguagem Natural**: "Gastei 30 no mercado" → transação categorizada e validada.
+- **Consultas Granulares**: "Quanto gastei com lazer em agosto?" → resposta determinística.
+- **Exportação CSV**: `/exportar` ou "manda a planilha de setembro".
+- **Metas de Orçamento**: alertas automáticos em 80% (🟡) e 100% (🔴).
+- **Insights Preditivos**: análise IA com projeção de fechamento do mês.
 
 ### Avançadas
 - **Split de contas**: "dividido em 3 com Maria e João" → criação automática de dívidas
@@ -119,6 +128,10 @@ npm run typecheck
 | Comando | Descrição |
 |---|---|
 | `/start` | Introdução e lista completa de comandos |
+| `/patrimonio` | Painel de patrimônio consolidado (líquido, VR/VA, caixinhas, ações, faturas) |
+| `/saldo` | Visão de saldo real em conta vs saldo livre (Safe-to-Spend) e benefícios |
+| `/investimentos` | Caixinhas (% CDI com rendimento e IR/IOF) e carteira de ações/FIIs |
+| `/ajustar_saldo <conta> <valor>` | Definir saldo inicial ou conciliar valor atual da conta/VR |
 | `/resumo` | Resumo do mês atual |
 | `/fatura` | Fatura do cartão de crédito |
 | `/dividas` | Quem te deve |
@@ -176,22 +189,25 @@ npm run typecheck
 ```
 src/
 ├── bot/                  # Handlers e comandos do Telegram
-│   ├── commands/         # Comandos individuais (/resumo, /grafico, etc.)
+│   ├── commands/         # Comandos individuais (/patrimonio, /saldo, /resumo, etc.)
 │   ├── handlers/         # messageHandler, voiceHandler, callbackQueryHandler
 │   ├── keyboards/        # Teclados inline dinâmicos
 │   └── index.ts          # Setup do bot
 ├── clients/              # Clientes (Supabase, Gemini, Telegram)
 ├── config/               # Constantes e variáveis de ambiente
 ├── services/
+│   ├── accounts/         # Gestão de contas, saldos e Safe-to-Spend
 │   ├── categories/       # Cache de categorias
 │   ├── debts/            # Split e pagamentos
 │   ├── exchange/         # Taxas de câmbio
 │   ├── gemini/           # Integração com Gemini (guards, prompts, parsers)
+│   ├── investments/      # Rendimento CDI (Bacen) e Renda Variável (Brapi/Yahoo)
+│   ├── patrimony/        # Consolidador de patrimônio líquido
 │   ├── people/           # Resolução de pessoas
 │   ├── savings/          # Metas de poupança
-│   └── transactions/     # CRUD de transações
+│   └── transactions/     # CRUD de transações e entradas
 ├── types/                # Tipos TypeScript
-└── utils/                # Utilitários (concurrency, rateLimit, etc.)
+└── utils/                # Utilitários (concurrency, rateLimit, formatters, etc.)
 ```
 
 ---
@@ -268,6 +284,7 @@ Para decisões arquiteturais detalhadas, consulte [`docs/adrs/`](docs/adrs/):
 1. **Intent Routing com Payload Único**: por que unimos intenção + extração em 1 chamada
 2. **Segurança contra Alucinações**: Zod, double-opt-in e hard-limits
 3. **Fila Serial por ChatId**: concorrência sem Redis
+4. **Contas, Patrimônio e Rendimento CDI**: Ledger unificado com receitas, Safe-to-Spend híbrido e rendimentos CDI automáticos via Bacen
 
 ---
 

@@ -65,6 +65,17 @@ export function buildTransactionSchema(categoryMap: Record<number, string>) {
           'Número total de parcelas, se mencionado (ex: "em 3x", "parcelado em 5 vezes"). ' +
           'Retorne null se a compra foi à vista/integral.',
       },
+      entry_type: {
+        type: Type.STRING,
+        enum: ['expense', 'income', 'yield', 'transfer'],
+        nullable: true,
+        description: 'Natureza do lançamento: "expense" para gastos, "income" para entradas/receitas.',
+      },
+      account_name: {
+        type: Type.STRING,
+        nullable: true,
+        description: 'Nome da conta ou benefício citado (ex: "Nubank", "VR", "Inter").',
+      },
     },
     required: ['description', 'total_amount', 'category_id', 'occurred_at'],
   };
@@ -135,6 +146,7 @@ export function buildPayloadSchema(categoryMap: Record<number, string>) {
         type: Type.STRING,
         enum: [
           'NOVO_GASTO',
+          'NOVA_ENTRADA',
           'PAGAMENTO_DIVIDA',
           'CONSULTA',
           'EXPORTAR',
@@ -144,15 +156,24 @@ export function buildPayloadSchema(categoryMap: Record<number, string>) {
           'GRAFICO',
           'INSIGHT',
           'POUPANCA',
+          'PATRIMONIO',
+          'INVESTIMENTOS',
+          'AJUSTAR_SALDO',
+          'TRANSFERENCIA',
           'CONFIRMACAO_REQUERIDA',
           'OUTROS',
         ],
         description:
           'NOVO_GASTO: o usuário relata uma despesa nova (preencha "transaction"). ' +
+          'NOVA_ENTRADA: o usuário relata uma entrada de dinheiro (salário, recarga de VR, freelance, pix recebido; preencha "transaction" com entry_type="income"). ' +
           'PAGAMENTO_DIVIDA: alguém pagou/quitou uma dívida com o usuário. ' +
-          'CONSULTA: o usuário quer ver informação existente (resumo, fatura, dívidas, últimos gastos); preencha params.entidade. ' +
+          'CONSULTA: o usuário quer ver informação existente (resumo, fatura, dívidas, últimos gastos, entradas, patrimônio, saldo); preencha params.entidade. ' +
+          'PATRIMONIO: o usuário pergunta pelo seu patrimônio total consolidado ou onde está investido. ' +
+          'INVESTIMENTOS: o usuário pergunta especificamente sobre caixinhas (rendimentos CDI) ou renda variável. ' +
+          'AJUSTAR_SALDO: o usuário quer definir/ajustar o saldo atual de uma conta (params.nomeConta, params.saldoAjuste). ' +
+          'TRANSFERENCIA: transferência entre contas (params.contaOrigem, params.contaDestino). ' +
           'Consultas granulares: se a pergunta cita uma CATEGORIA (ex: "quanto gastei com transporte?"), preencha params.category com o nome EXATO do catálogo; ' +
-          'se cita um MÊS (ex: "em agosto", "o mês passado"), resolva com a data de referência e preencha params.month (YYYY-MM); params.type = "gasto" quando a consulta é sobre gastos. ' +
+          'se cita um MÊS (ex: "em agosto", "o mês passado"), resolva com a data de referência e preencha params.month (YYYY-MM); params.type = "gasto"|"entrada"|"tudo". ' +
           'EXPORTAR: o usuário pede um CSV (params.tipoExport = "gastos"|"dividas", params.month opcional). ' +
           'META: define/lista/remove metas (params.accionMeta, params.categoriaMeta, params.limiteMeta). ' +
           'CARTAO: gerencia cartões (params.accionCartao, params.nomeCartao, params.closingDay). ' +
@@ -169,7 +190,7 @@ export function buildPayloadSchema(categoryMap: Record<number, string>) {
         properties: {
           entidade: {
             type: Type.STRING,
-            enum: ['resumo', 'fatura', 'dividas', 'gastos'],
+            enum: ['resumo', 'fatura', 'dividas', 'gastos', 'entradas', 'patrimonio', 'saldo', 'investimentos'],
           },
           month: {
             type: Type.STRING,
@@ -186,9 +207,9 @@ export function buildPayloadSchema(categoryMap: Record<number, string>) {
           },
           type: {
             type: Type.STRING,
-            enum: ['gasto'],
+            enum: ['gasto', 'entrada', 'tudo'],
             description:
-              'CONSULTA granular: natureza do lançamento consultado. Sempre "gasto" (o ledger é expense-only).',
+              'CONSULTA granular: natureza do lançamento consultado.',
           },
           tipoExport: {
             type: Type.STRING,
@@ -240,6 +261,40 @@ export function buildPayloadSchema(categoryMap: Record<number, string>) {
           pedidoDescricao: {
             type: Type.STRING,
             description: 'Somente CONFIRMACAO_REQUERIDA: o que o usuário pediu para apagar/remover.',
+          },
+          nomeConta: {
+            type: Type.STRING,
+            description: 'Nome da conta citada (ex: "Nubank", "VR", "Caixinha Reserva").',
+          },
+          saldoAjuste: {
+            type: Type.NUMBER,
+            description: 'Novo valor para ajuste de saldo.',
+          },
+          cdiRate: {
+            type: Type.NUMBER,
+            description: 'Percentual do CDI da caixinha (ex: 115 para 115%).',
+          },
+          tipoConta: {
+            type: Type.STRING,
+            enum: ['checking', 'benefit', 'fixed_income', 'investment_broker'],
+          },
+          ticker: {
+            type: Type.STRING,
+            description: 'Código do ativo na B3 ou cripto (ex: "PETR4", "MXRF11", "BTC").',
+          },
+          quantidadeAtivo: {
+            type: Type.NUMBER,
+            description: 'Quantidade de cotas do ativo.',
+          },
+          precoMedioAtivo: {
+            type: Type.NUMBER,
+            description: 'Preço médio de compra do ativo em reais.',
+          },
+          contaOrigem: {
+            type: Type.STRING,
+          },
+          contaDestino: {
+            type: Type.STRING,
           },
         },
       },

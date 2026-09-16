@@ -90,16 +90,22 @@ export function buildPayloadPrompt(
     '',
     'Classifique a intenção da mensagem e, quando aplique, preencha "params" e "transaction".',
     'Regras:',
-    '  - NOVO_GASTO: o usuário relata uma despesa nova. Preencha "transaction" com os campos obrigatórios. ' +
+    '  - NOVO_GASTO: o usuário relata uma despesa nova. Preencha "transaction" com os campos obrigatórios e entry_type = "expense". ' +
       'Se o usuário NÃO citar a forma de pagamento, retorne payment_method = null (o sistema infere vale/crédito pela categoria). NUNCA invente um método. ' +
       '8.7 — Se a despesa é dividida ENTRE VÁRIAS pessoas (ex: "dividido em 3 com Maria e João"), preencha third_party_names ' +
       'com todos os nomes citados e NÃO preencha my_share_amount (o sistema calcula as partes em partes iguais); ' +
       'se citar explicitamente sua parte (ex: "minha parte é 40"), preencha my_share_amount. Se for apenas UMA pessoa, use third_party_name.',
+    '  - NOVA_ENTRADA: o usuário relata um recebimento/depósito de dinheiro (salário, recarga de VR, pix recebido, freelance, restituição). ' +
+      'Preencha "transaction" com description, total_amount, occurred_at, entry_type = "income" e se citado o destino/banco/vale, preencha account_name (ex: "Nubank", "VR").',
+    '  - PATRIMONIO: o usuário quer ver seu patrimônio total consolidado ("qual meu patrimônio?", "onde tá meu dinheiro?", "saldo total"). Preencha params.entidade = "patrimonio".',
+    '  - INVESTIMENTOS: o usuário pergunta especificamente sobre seus investimentos, caixinhas ou rendimento (% CDI). Preencha params.entidade = "investimentos".',
+    '  - AJUSTAR_SALDO: o usuário quer definir ou conciliar o saldo atual de uma conta (ex: "ajustar saldo do VR para 800", "meu saldo no Nubank é 1500"). Preencha params.nomeConta e params.saldoAjuste.',
+    '  - TRANSFERENCIA: o usuário transferiu dinheiro entre contas ou aplicou na caixinha (ex: "transferi 200 da conta para a caixinha"). Preencha params.contaOrigem e params.contaDestino.',
     '  - PAGAMENTO_DIVIDA: alguém pagou/quitou uma dívida com o usuário.',
-    '  - CONSULTA: o usuário quer ver informação existente (resumo, fatura, dívidas, últimos gastos). Preencha params.entidade.',
+    '  - CONSULTA: o usuário quer ver informação existente (resumo, fatura, dívidas, últimos gastos, saldo). Preencha params.entidade.',
     '  - CONSULTA GRANULAR (8.4): se a pergunta cita UMA CATEGORIA (ex: "quanto gastei com transporte?", "o que gastei com alimentação em agosto?"), ' +
       'preencha params.category com o nome EXATO do catálogo de categorias acima (sem inventar). Se cita um MÊS (ex: "em agosto", "o mês passado", "este mês"), ' +
-      'resolva com a data de referência (normalize para YYYY-MM) e preencha params.month. Preencha params.type = "gasto" quando a consulta é sobre gastos.',
+      'resolva com a data de referência (normalize para YYYY-MM) e preencha params.month. Preencha params.type = "gasto"|"entrada"|"tudo".',
     '  - EXPORTAR: o usuário pede um CSV. params.tipoExport = "gastos" (padrão) ou "dividas"; params.month só se citado (formato YYYY-MM).',
     '  - META: metas de gasto por categoria. params.accionMeta = listar|definir|remover; para definir, preencha params.categoriaMeta e params.limiteMeta.',
     '  - CARTAO: gestão de cartões. params.accionCartao = listar|add|remover|fatura; params.nomeCartao e params.closingDay (1-28) quando citados.',

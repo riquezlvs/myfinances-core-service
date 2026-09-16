@@ -141,6 +141,8 @@ export async function registrarTransacao(
           third_party_id: thirdPartyId,
           third_party_share_amount: thirdPartyShareTotal,
           raw_input: rawInput,
+          entry_type: dados.entry_type ?? 'expense',
+          account_id: dados.account_id ?? null,
         })
         .select('display_id')
         .single();
@@ -728,5 +730,87 @@ export async function apagarTransacoesPorIds(
 
     if (error) throw new Error(`Erro ao apagar lote de transações: ${error.message}`);
     return { apagadas: (data ?? []).map((d) => d.display_id as number) };
+  });
+}
+
+/**
+ * Registra uma entrada de dinheiro (salário, freelance, recarga de VR, etc.)
+ * e credita opcionalmente o saldo da conta vinculada.
+ */
+export async function registrarEntrada(
+  dados: {
+    description: string;
+    total_amount: number;
+    account_name?: string | null;
+    account_id?: string | null;
+    category_id?: number;
+    occurred_at?: string;
+  },
+  rawInput: string,
+  requestId: string
+): Promise<{ displayId: number; accountName: string; novoSaldo?: number }> {
+  return withTiming('registrar entrada', { requestId, total_amount: dados.total_amount }, async () => {
+    const supabase = getSupabaseClient();
+    let accountId = dados.account_id ?? null;
+    let accountName = dados.account_name ?? 'Conta Principal';
+
+    if (!accountId && dados.account_name) {
+      try {
+        const { data: c } = await supabase
+          .from('accounts')
+          .select('id, name')
+          .ilike('name', dados.account_name.trim())
+          .maybeSingle();
+        if (c) {
+          accountId = c.id;
+          accountName = c.name;
+        }
+      } catch {
+        // Ignora caso tabela de contas ainda não exista no ambiente
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('transactions')
+      .insert({
+        description: dados.description,
+        total_amount: dados.total_amount,
+        category_id: dados.category_id ?? 1,
+        payment_method: 'pix',
+        occurred_at: dados.occurred_at ?? new Date().toISOString(),
+        raw_input: rawInput,
+        entry_type: 'income',
+        account_id: accountId,
+      })
+      .select('display_id')
+      .single();
+
+    if (error) throw new Error(`Erro ao registrar entrada no Supabase: ${error.message}`);
+
+    let novoSaldo: number | undefined;
+    if (accountId) {
+      try {
+        const { data: acc } = await supabase
+          .from('accounts')
+          .select('balance')
+          .eq('id', accountId)
+          .maybeSingle();
+        if (acc) {
+          novoSaldo = Math.round((Number(acc.balance) + dados.total_amount) * 100) / 100;
+          await supabase
+            .from('accounts')
+            .update({ balance: novoSaldo, updated_at: new Date().toISOString() })
+            .eq('id', accountId);
+        }
+      } catch {
+        // Ignora erro caso ocorra em ambiente isolado
+      }
+    }
+
+    return {
+      displayId: data.display_id as number,
+      accountName,
+      novoSaldo,
+    };
   });
 }

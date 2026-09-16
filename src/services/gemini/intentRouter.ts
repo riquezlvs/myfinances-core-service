@@ -98,6 +98,32 @@ export async function classificarIntencao(texto: string, requestId: string): Pro
       }
     }
 
+    if (validado.intent === 'NOVA_ENTRADA') {
+      if (!validado.transaction) {
+        log('warn', 'Entrada classificada sem transaction; tratando como OUTROS', { requestId });
+        return emptyIntentPayload();
+      }
+      try {
+        const tx = validarTransacao(validado.transaction, categoryMap, agoraISO, requestId);
+        return {
+          intent: 'NOVA_ENTRADA',
+          params: validado.params,
+          transaction: {
+            ...tx.data,
+            entry_type: 'income',
+            account_name: (validado.transaction as any).account_name ?? validado.params.nomeConta ?? null,
+          },
+          avisos: tx.warnings,
+        };
+      } catch (err) {
+        log('warn', 'Transação de entrada rejeitada pelo guard; tratando como OUTROS', {
+          requestId,
+          erro: err instanceof Error ? err.message : String(err),
+        });
+        return { intent: 'OUTROS', params: {}, transaction: null, avisos: [] };
+      }
+    }
+
     return {
       intent: validado.intent,
       params: validado.params,

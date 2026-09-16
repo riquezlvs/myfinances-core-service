@@ -66,6 +66,29 @@ export async function callbackQueryHandler(
     return;
   }
 
+  if (primeiraParte === 'patrimonio') {
+    const sub = data.split(':')[1];
+    if (sub === 'atualizar_cdi') {
+      await bot.answerCallbackQuery(query.id, { text: '⏳ Atualizando rendimentos das caixinhas...' });
+      const { atualizarRendimentosCaixinhas } = await import('../../services/investments/yieldService');
+      const processadas = await atualizarRendimentosCaixinhas(requestId);
+      const totalRendeu = processadas.reduce((s, p) => s + p.rendimentoLiquido, 0);
+      await bot.sendMessage(
+        chatId,
+        `✅ *Rendimentos creditados!* Atualizadas ${processadas.length} caixinha(s), totalizando +R$ ${totalRendeu.toFixed(2)} no saldo.`
+      );
+      const { handlePatrimonio } = await import('../commands/patrimonio');
+      await handlePatrimonio(chatId, requestId, bot);
+      return;
+    }
+    if (sub === 'saldos') {
+      await bot.answerCallbackQuery(query.id);
+      const { handleSaldo } = await import('../commands/saldo');
+      await handleSaldo(chatId, requestId, bot);
+      return;
+    }
+  }
+
   try {
     const [acao, idStr, extra] = data.split(':');
     // Ações de lote de extrato: catl, crdl, undl, setcl, setcrdl, backl

@@ -16,6 +16,7 @@ export type CardType = 'credit' | 'meal_voucher' | 'food_voucher';
  */
 export type Intent =
   | 'NOVO_GASTO'
+  | 'NOVA_ENTRADA'
   | 'PAGAMENTO_DIVIDA'
   | 'CONSULTA'
   | 'EXPORTAR'
@@ -25,18 +26,22 @@ export type Intent =
   | 'GRAFICO'
   | 'INSIGHT'
   | 'POUPANCA'
+  | 'PATRIMONIO'
+  | 'INVESTIMENTOS'
+  | 'AJUSTAR_SALDO'
+  | 'TRANSFERENCIA'
   | 'CONFIRMACAO_REQUERIDA'
   | 'OUTROS';
 
 /** Entidade consultada em CONSULTA (todas leem dados, nunca mutam). */
-export type EntidadeConsulta = 'resumo' | 'fatura' | 'dividas' | 'gastos';
+export type EntidadeConsulta = 'resumo' | 'fatura' | 'dividas' | 'gastos' | 'entradas' | 'patrimonio' | 'saldo' | 'investimentos';
 
 /**
- * 8.4 — Natureza do lançamento consultado. Hoje o ledger é expense-only
- * ("gasto"); o enum existe para o usuário poder dizer "o que gastei" sem
- * que a IA invente outro tipo — qualquer valor fora daqui é descartado.
+ * 8.4/11.0 — Natureza do lançamento consultado.
  */
-export type TipoConsulta = 'gasto';
+export type TipoConsulta = 'gasto' | 'entrada' | 'tudo';
+
+export type EntryType = 'expense' | 'income' | 'yield' | 'transfer';
 
 export interface IntentParams {
   /** CONSULTA: que tipo de informação quer o usuário. */
@@ -51,7 +56,7 @@ export interface IntentParams {
    * Supabase em CÓDIGO — a IA nunca escolhe o category_id da consulta.
    */
   category?: string;
-  /** 8.4 — CONSULTA granular: natureza do lançamento (hoje só 'gasto'). */
+  /** 8.4 — CONSULTA granular: natureza do lançamento. */
   type?: TipoConsulta;
   /** EXPORTAR: 'gastos' (default) ou 'dividas'. */
   tipoExport?: 'gastos' | 'dividas';
@@ -79,6 +84,17 @@ export interface IntentParams {
   prazoPoupanca?: string;
   /** CONFIRMACAO_REQUERIDA: descrição humana do que o usuário pediu. */
   pedidoDescricao?: string;
+
+  /** Fase 11: Parâmetros de Contas e Investimentos */
+  nomeConta?: string;
+  saldoAjuste?: number;
+  cdiRate?: number;
+  tipoConta?: 'checking' | 'benefit' | 'fixed_income' | 'investment_broker';
+  ticker?: string;
+  quantidadeAtivo?: number;
+  precoMedioAtivo?: number;
+  contaOrigem?: string;
+  contaDestino?: string;
 }
 
 export interface ParsedTransaction {
@@ -105,6 +121,13 @@ export interface ParsedTransaction {
    * apenas pela inferência determinística em código (paymentInference.ts).
    */
   card_id?: string | null;
+
+  /** Fase 11: Tipo de entrada e conta vinculada */
+  entry_type?: EntryType;
+  account_id?: string | null;
+  account_name?: string | null;
+  destination_account_id?: string | null;
+  destination_account_name?: string | null;
 }
 
 /**

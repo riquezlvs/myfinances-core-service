@@ -72,4 +72,46 @@ describe('classificarIntencao — extração de params granulares (8.4)', () => 
     expect(payload.params.category).toBe('Transporte');
     expect(payload.params.month).toBeUndefined();
   });
+
+  it('classifica NOVA_ENTRADA e popula dados estruturados de receita', async () => {
+    mockGenerateContent.mockResolvedValue({
+      text: payloadGemini(
+        'NOVA_ENTRADA',
+        { nomeConta: 'VR' },
+        {
+          description: 'Recarga mensal VR',
+          total_amount: 800,
+          category_id: 1,
+          occurred_at: '2026-09-01T10:00:00.000Z',
+          account_name: 'VR',
+        }
+      ),
+    });
+
+    const payload = await classificarIntencao('Caiu 800 de VR hoje', 'req-4');
+
+    expect(payload.intent).toBe('NOVA_ENTRADA');
+    expect(payload.transaction).not.toBeNull();
+    expect(payload.transaction?.total_amount).toBe(800);
+    expect(payload.transaction?.entry_type).toBe('income');
+    expect(payload.transaction?.account_name).toBe('VR');
+  });
+
+  it('classifica PATRIMONIO e AJUSTAR_SALDO corretamente', async () => {
+    mockGenerateContent.mockResolvedValue({
+      text: payloadGemini('PATRIMONIO', { entidade: 'patrimonio' }),
+    });
+
+    const payloadPatrimonio = await classificarIntencao('qual meu patrimônio?', 'req-5');
+    expect(payloadPatrimonio.intent).toBe('PATRIMONIO');
+
+    mockGenerateContent.mockResolvedValue({
+      text: payloadGemini('AJUSTAR_SALDO', { nomeConta: 'Nubank', saldoAjuste: 2500 }),
+    });
+
+    const payloadAjuste = await classificarIntencao('meu saldo no Nubank é 2500', 'req-6');
+    expect(payloadAjuste.intent).toBe('AJUSTAR_SALDO');
+    expect(payloadAjuste.params.nomeConta).toBe('Nubank');
+    expect(payloadAjuste.params.saldoAjuste).toBe(2500);
+  });
 });

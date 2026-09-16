@@ -7,6 +7,10 @@ export async function setupCommands(): Promise<void> {
 
   await bot.setMyCommands([
     { command: 'start', description: 'Ver como usar o bot' },
+    { command: 'patrimonio', description: 'Ver patrimônio consolidado e alocação' },
+    { command: 'saldo', description: 'Saldo real vs Saldo livre (Safe-to-Spend)' },
+    { command: 'investimentos', description: 'Caixinhas (% CDI) e Renda Variável' },
+    { command: 'ajustar_saldo', description: 'Conciliar saldo de conta ou VR' },
     { command: 'resumo', description: 'Resumo do mês atual' },
     { command: 'fatura', description: 'Fatura do cartão de crédito' },
     { command: 'dividas', description: 'Quem te deve' },
