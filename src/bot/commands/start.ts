@@ -24,7 +24,7 @@ export async function handleStart(chatId: number, bot: TelegramBot = getTelegram
       '/patrimonio — patrimônio consolidado (ativos, caixinhas, ações, dívidas)',
       '/saldo — saldo real em conta vs saldo livre (Safe-to-Spend)',
       '/investimentos — caixinhas (% CDI com rendimento) e renda variável',
-      '/ajustar_saldo <conta> <valor> — definir saldo inicial/conciliar',
+      '/ajustar\\_saldo <conta> <valor> — definir saldo inicial/conciliar',
       '/resumo — resumo do mês (categorias, métodos, alertas)',
       '/fatura — fatura do cartão de crédito',
       '/dividas — quem te deve (e despesas divididas)',

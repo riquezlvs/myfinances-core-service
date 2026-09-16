@@ -28,7 +28,7 @@ export async function handleSaldo(chatId: number, requestId: string, bot: Telegr
       }
     }
 
-    linhas.push('\n_Dica: Use /ajustar_saldo <conta> <valor> para conciliar seu saldo atual._');
+    linhas.push('\n_Dica: Use /ajustar\\_saldo <conta> <valor> para conciliar seu saldo atual._');
 
     await bot.sendMessage(chatId, linhas.join('\n'), {
       parse_mode: 'Markdown',
