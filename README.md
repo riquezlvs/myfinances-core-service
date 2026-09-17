@@ -66,6 +66,37 @@ O MyFinances permite registrar gastos, consultar resumos, dividir contas, criar 
 
 ---
 
+## 📖 Guia Rápido: Como Usar o Sistema
+
+> 💡 **Quer aprender todos os detalhes e cenários práticos?** Confira o **[Guia Completo de Uso](docs/GUIA_DE_USO.md)**.
+
+### 1️⃣ Calibre seus Saldos Iniciais
+Defina quanto dinheiro você tem em cada conta ou benefício para o bot saber de onde tirar ou creditar:
+- `/ajustar_saldo Nubank 2500` → define o saldo bancário da conta corrente
+- `/ajustar_saldo VR 800` → define o saldo do seu vale refeição/alimentação
+- *Ou fale normalmente:* `"Meu saldo no Nubank é 2500"` ou `"Tenho 800 no VR"`
+
+### 2️⃣ Registre Entradas de Dinheiro
+Sempre que pingar salário, freelance ou recarga:
+- `"Caiu meu salário de 5000 no Nubank"`
+- `"Recarga do VR de 800"`
+- `"Recebi 1200 de freela no Inter"`
+O bot credita na conta certa e atualiza seu saldo e patrimônio líquido!
+
+### 3️⃣ Registre Gastos no Dia a Dia
+O bot identifica automaticamente a categoria e o meio de pagamento:
+- `"Almoço 42 no VR"` → debita do saldo pré-pago do seu benefício (sem mexer no banco)
+- `"Mercado 150 no débito"` → debita do saldo da conta corrente
+- `"Tênis 350 em 3x no cartão Nubank"` → entra na fatura de crédito futura
+- `"Jantar 120 dividido com João e Maria"` → divide a despesa e anota quem te deve
+
+### 4️⃣ Acompanhe seu Dinheiro & Investimentos
+- `/patrimonio`: Visão 360° do patrimônio líquido consolidado: contas bancárias + saldo VR + caixinhas com rendimento + ações − faturas abertas a pagar.
+- `/saldo`: **Safe-to-Spend** — mostra seu saldo real em conta vs quanto você realmente pode gastar sem comprometer a fatura do cartão que vai vencer.
+- `/investimentos`: Detalha suas Caixinhas de renda fixa (rendimento automático em % CDI pelo Banco Central com desconto de IR) e ações a mercado.
+
+---
+
 ## Pré-requisitos
 
 - Node.js 20+

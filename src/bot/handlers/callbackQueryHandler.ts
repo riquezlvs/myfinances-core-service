@@ -228,6 +228,26 @@ async function manipularNavegacao(
     case 'viagem':
       await handleViagem(chatId, '', requestId, bot);
       break;
+    case 'patrimonio': {
+      const { handlePatrimonio } = await import('../commands/patrimonio');
+      await handlePatrimonio(chatId, requestId, bot);
+      break;
+    }
+    case 'saldo': {
+      const { handleSaldo } = await import('../commands/saldo');
+      await handleSaldo(chatId, requestId, bot);
+      break;
+    }
+    case 'investimentos': {
+      const { handleInvestimentos } = await import('../commands/investimentos');
+      await handleInvestimentos(chatId, requestId, bot);
+      break;
+    }
+    case 'comandos': {
+      const { handleComandos } = await import('../commands/start');
+      await handleComandos(chatId, bot);
+      break;
+    }
     case 'novogasto':
       await bot.sendMessage(
         chatId,

@@ -9,7 +9,7 @@ import { processarPagamento } from '../../services/debts/debtService';
 import { extrairNomeEValorDeFrase } from '../../utils/textParsers';
 import { formatarPagamento, formatarReal, formatarDataCurta } from '../../utils/formatters';
 import { registrarEResponderGasto } from './novoGasto';
-import { handleStart } from '../commands/start';
+import { handleStart, handleComandos } from '../commands/start';
 import { handleResumo } from '../commands/resumo';
 import { handleDividas } from '../commands/dividas';
 import { handleGastos } from '../commands/gastos';
@@ -611,6 +611,11 @@ async function rotearComando(
   if (texto.startsWith('/start')) {
     log('info', 'Comando: /start', { requestId });
     await handleStart(chatId, bot);
+    return true;
+  }
+  if (texto.startsWith('/comandos') || texto.startsWith('/ajuda')) {
+    log('info', 'Comando: /comandos', { requestId });
+    await handleComandos(chatId, bot);
     return true;
   }
   if (texto.startsWith('/resumo')) {
