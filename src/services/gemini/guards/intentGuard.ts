@@ -27,6 +27,7 @@ export const INTENT_VALUES: readonly Intent[] = [
   'INVESTIMENTOS',
   'AJUSTAR_SALDO',
   'TRANSFERENCIA',
+  'SIMULAR_PARCELAS',
   'CONFIRMACAO_REQUERIDA',
   'OUTROS',
 ];
@@ -68,6 +69,8 @@ const CHAVES_PARAMS = [
   'precoMedioAtivo',
   'contaOrigem',
   'contaDestino',
+  'valorSimulacao',
+  'parcelasSimulacao',
 ];
 
 const paramsSchema = z
@@ -110,6 +113,10 @@ const paramsSchema = z
     precoMedioAtivo: z.number().finite().positive().optional(),
     contaOrigem: z.string().trim().min(1).max(60).optional(),
     contaDestino: z.string().trim().min(1).max(60).optional(),
+
+    // Simulador de compras parceladas
+    valorSimulacao: z.number().finite().positive().max(10_000_000).optional(),
+    parcelasSimulacao: z.number().int().min(2).max(48).optional(),
   })
   .strip();
 

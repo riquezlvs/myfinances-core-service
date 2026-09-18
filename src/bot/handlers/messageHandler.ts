@@ -5,6 +5,7 @@ import { getTelegramBot } from '../../clients/telegramClient';
 import { log, withTiming } from '../../utils/logger';
 import { AUTHORIZED_USER_ID } from '../../config/env';
 import { classificarIntencao } from '../../services/gemini/intentRouter';
+import { processarTextoEntrada } from '../../core/engine';
 import { processarPagamento } from '../../services/debts/debtService';
 import { extrairNomeEValorDeFrase } from '../../utils/textParsers';
 import { formatarPagamento, formatarReal, formatarDataCurta } from '../../utils/formatters';
@@ -35,6 +36,7 @@ import { handlePatrimonio } from '../commands/patrimonio';
 import { handleSaldo } from '../commands/saldo';
 import { handleAjustarSaldo } from '../commands/ajustarSaldo';
 import { handleInvestimentos } from '../commands/investimentos';
+import { handleSimular } from '../commands/simular';
 import { getCategoryMap } from '../../services/categories/categoryCache';
 import { enqueue } from '../../utils/concurrency';
 import { verificarRateLimit, tokensRestantes } from '../../utils/rateLimit';
@@ -69,6 +71,7 @@ const ROTAS_POR_INTENT: Record<Intent, string> = {
   INVESTIMENTOS: 'investimentosViaIA',
   AJUSTAR_SALDO: 'ajustarSaldoViaIA',
   TRANSFERENCIA: 'transferenciaViaIA',
+  SIMULAR_PARCELAS: 'simularViaIA',
   CONFIRMACAO_REQUERIDA: 'confirmacaoRequerida',
   OUTROS: 'outros',
 };
@@ -864,6 +867,12 @@ async function rotearComando(
     await handleAjustarSaldo(chatId, argumentos, requestId, bot);
     return true;
   }
+  if (texto.startsWith('/simular')) {
+    log('info', 'Comando: /simular', { requestId });
+    const argumentos = texto.replace(/^\/simular/i, '').trim();
+    await handleSimular(chatId, argumentos, requestId, bot);
+    return true;
+  }
   if (texto.startsWith('/')) {
     log('warn', 'Comando não reconhecido', { requestId, texto });
     await bot.sendMessage(chatId, '❓ Comando não reconhecido. Use /start para ver os comandos disponíveis.');
@@ -950,6 +959,20 @@ async function processarMensagemAutorizada(
 
     await bot.sendChatAction(chatId, 'typing');
 
+    // Integração com o Core Engine Unificado
+    // Fase 8: O Core Engine processa IA, regras de negócio e persistência de forma unificada para Telegram e Web.
+    const resultadoEngine = await processarTextoEntrada({
+      texto,
+      origem: 'telegram',
+      requestId,
+      userId: msg.from?.id,
+    });
+
+    if (resultadoEngine.sucesso && (resultadoEngine.tipo === 'gasto' || resultadoEngine.tipo === 'entrada')) {
+      await bot.sendMessage(chatId, resultadoEngine.mensagem);
+      return;
+    }
+
     // Fase 8: UMA chamada ao Gemini retorna intent + params + transaction.
     const payload: IntentPayload = await withTiming('rotear intenção da mensagem', { requestId }, () =>
       classificarIntencao(texto, requestId)
@@ -1019,6 +1042,22 @@ async function processarMensagemAutorizada(
       case 'AJUSTAR_SALDO': {
         const argStr = `${payload.params.nomeConta ?? ''} ${payload.params.saldoAjuste ?? ''}`.trim();
         await handleAjustarSaldo(chatId, argStr, requestId, bot);
+        break;
+      }
+      case 'SIMULAR_PARCELAS': {
+        const valor = payload.params.valorSimulacao;
+        const parcelas = payload.params.parcelasSimulacao;
+        const cartao = payload.params.nomeCartao;
+        if (valor && parcelas) {
+          const argStr = `${valor} ${parcelas}x${cartao ? ` ${cartao}` : ''}`;
+          await handleSimular(chatId, argStr, requestId, bot);
+        } else {
+          await bot.sendMessage(
+            chatId,
+            '💡 Para simular parcelas me diga o valor e o número de vezes.\n\n📌 Ex: "simula comprar um celular de 2400 em 12x" ou use `/simular 2400 12x`',
+            { parse_mode: 'Markdown' }
+          );
+        }
         break;
       }
       case 'CONFIRMACAO_REQUERIDA':

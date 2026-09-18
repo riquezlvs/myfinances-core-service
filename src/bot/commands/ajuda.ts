@@ -108,6 +108,10 @@ export function obterConteudoAjuda(topico: AjudaTopico): { texto: string; teclad
           '',
           '🧾 *Consultar sua Fatura:*',
           '• `/fatura` — Mostra o total da fatura atual e futuras parcelas a vencer.',
+          '',
+          '📱 *Simulador de Parcelamento:*',
+          '• `/simular <valor> <parcelas>x [cartão]` — Simula como ficarão suas próximas faturas se comprar algo parcelado.',
+          '• _Ou fale normalmente:_ "simula comprar um celular de 2400 em 12x"',
         ].join('\n'),
         teclado: buildAjudaTopicoKeyboard(),
       };

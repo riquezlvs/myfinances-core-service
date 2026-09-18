@@ -160,6 +160,7 @@ export function buildPayloadSchema(categoryMap: Record<number, string>) {
           'INVESTIMENTOS',
           'AJUSTAR_SALDO',
           'TRANSFERENCIA',
+          'SIMULAR_PARCELAS',
           'CONFIRMACAO_REQUERIDA',
           'OUTROS',
         ],
@@ -172,6 +173,7 @@ export function buildPayloadSchema(categoryMap: Record<number, string>) {
           'INVESTIMENTOS: o usuário pergunta especificamente sobre caixinhas (rendimentos CDI) ou renda variável. ' +
           'AJUSTAR_SALDO: o usuário quer definir/ajustar o saldo atual de uma conta (params.nomeConta, params.saldoAjuste). ' +
           'TRANSFERENCIA: transferência entre contas (params.contaOrigem, params.contaDestino). ' +
+          'SIMULAR_PARCELAS: o usuário quer simular como ficariam suas próximas faturas se fizesse uma compra parcelada (params.valorSimulacao, params.parcelasSimulacao, params.nomeCartao opcional). ' +
           'Consultas granulares: se a pergunta cita uma CATEGORIA (ex: "quanto gastei com transporte?"), preencha params.category com o nome EXATO do catálogo; ' +
           'se cita um MÊS (ex: "em agosto", "o mês passado"), resolva com a data de referência e preencha params.month (YYYY-MM); params.type = "gasto"|"entrada"|"tudo". ' +
           'EXPORTAR: o usuário pede um CSV (params.tipoExport = "gastos"|"dividas", params.month opcional). ' +
@@ -295,6 +297,14 @@ export function buildPayloadSchema(categoryMap: Record<number, string>) {
           },
           contaDestino: {
             type: Type.STRING,
+          },
+          valorSimulacao: {
+            type: Type.NUMBER,
+            description: 'Valor total da compra a ser simulada.',
+          },
+          parcelasSimulacao: {
+            type: Type.INTEGER,
+            description: 'Número de parcelas da simulação (ex: 12).',
           },
         },
       },

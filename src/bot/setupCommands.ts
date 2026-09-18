@@ -14,6 +14,7 @@ export async function setupCommands(): Promise<void> {
     { command: 'ajustar_saldo', description: 'Conciliar saldo de conta ou VR' },
     { command: 'resumo', description: 'Resumo do mês atual' },
     { command: 'fatura', description: 'Fatura do cartão de crédito' },
+    { command: 'simular', description: 'Simular compras parceladas e impacto' },
     { command: 'dividas', description: 'Quem te deve' },
     { command: 'gastos', description: 'Últimos gastos registrados' },
     { command: 'pago', description: 'Registrar um pagamento recebido' },

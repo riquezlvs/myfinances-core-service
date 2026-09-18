@@ -30,6 +30,7 @@ export type Intent =
   | 'INVESTIMENTOS'
   | 'AJUSTAR_SALDO'
   | 'TRANSFERENCIA'
+  | 'SIMULAR_PARCELAS'
   | 'CONFIRMACAO_REQUERIDA'
   | 'OUTROS';
 
@@ -95,6 +96,10 @@ export interface IntentParams {
   precoMedioAtivo?: number;
   contaOrigem?: string;
   contaDestino?: string;
+
+  /** Simulador de compras parceladas */
+  valorSimulacao?: number;
+  parcelasSimulacao?: number;
 }
 
 export interface ParsedTransaction {

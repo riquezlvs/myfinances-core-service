@@ -3,39 +3,45 @@ import http from 'http';
 import { iniciarBot } from './bot';
 import { log } from './utils/logger';
 
+import { handleApiRequest } from './api/routes';
+
 async function main(): Promise<void> {
-  const porta = Number(process.env.PORT || 3000);
-  const servidorHealthcheck = http.createServer((requisicao, resposta) => {
+  const porta = Number(process.env.PORT || 3001);
+  const servidorHttp = http.createServer(async (requisicao, resposta) => {
     const metodo = requisicao.method ?? 'GET';
     const url = requisicao.url ?? '/';
 
-    // Log para auditoria de tráfego HTTP no Render (ex: tentativas de webhook ou acessos web)
+    // Log para auditoria de tráfego HTTP
     if (metodo !== 'HEAD') {
       log('info', `🌐 Requisição HTTP recebida: ${metodo} ${url}`);
     }
+
+    // Tenta resolver pela API REST (CORS, /api/chat, /api/dashboard)
+    const tratouApi = await handleApiRequest(requisicao, resposta);
+    if (tratouApi) return;
 
     if (metodo === 'GET' || metodo === 'HEAD') {
       resposta.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
       resposta.end(
         metodo === 'HEAD'
           ? undefined
-          : 'Guará IA Online 🚀 O bot opera diretamente no Telegram! Envie mensagens ou o comando /start pelo aplicativo do Telegram.'
+          : 'Guará IA Online 🚀 Backend e API ativos. Pronto para atender Telegram e Web.'
       );
       return;
     }
 
     resposta.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
-    resposta.end('Método não permitido. O bot escuta mensagens via Telegram Bot API.');
+    resposta.end('Método não permitido.');
   });
 
   await new Promise<void>((resolve, reject) => {
-    servidorHealthcheck.once('error', reject);
-    servidorHealthcheck.listen(porta, () => {
-      servidorHealthcheck.removeListener('error', reject);
+    servidorHttp.once('error', reject);
+    servidorHttp.listen(porta, () => {
+      servidorHttp.removeListener('error', reject);
       resolve();
     });
   });
-  log('info', `Servidor de healthcheck HTTP ativo na porta ${porta}`);
+  log('info', `Servidor HTTP & API ativo na porta ${porta}`);
 
   const { shutdown } = await iniciarBot();
 
@@ -46,7 +52,7 @@ async function main(): Promise<void> {
     void shutdown().then(
       () =>
         new Promise<void>((resolve) => {
-          servidorHealthcheck.close(() => resolve());
+          servidorHttp.close(() => resolve());
         })
     ).then(() => process.exit(0));
   };
