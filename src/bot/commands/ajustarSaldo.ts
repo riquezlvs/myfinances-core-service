@@ -16,7 +16,13 @@ export async function handleAjustarSaldo(
       const lista = contas.map((c) => `• *${c.name}* (Atual: R$ ${formatarReal(Number(c.balance))})`).join('\n');
       await bot.sendMessage(
         chatId,
-        `Uso correto: \`/ajustar_saldo <nome_da_conta> <valor>\`\n\nExemplo: \`/ajustar_saldo VR 750\`\n\n*Suas contas cadastradas:*\n${lista || '_Nenhuma conta encontrada_'}`
+        `⚖️ *Como ajustar ou definir saldos:*\n\n` +
+          `Uso: \`/ajustar_saldo <nome_da_conta> <valor>\`\n\n` +
+          `📌 *Exemplos:*\n` +
+          `• \`/ajustar_saldo Nubank 2500\`\n` +
+          `• \`/ajustar_saldo VR 750,50\`\n\n` +
+          `🏦 *Suas contas cadastradas:*\n${lista || '_Nenhuma conta encontrada_'}`,
+        { parse_mode: 'Markdown' }
       );
       return;
     }
@@ -26,7 +32,11 @@ export async function handleAjustarSaldo(
     const nomeConta = partes.join(' ');
 
     if (isNaN(valor)) {
-      await bot.sendMessage(chatId, 'Valor inválido. Exemplo de uso: `/ajustar_saldo Nubank 2500`');
+      await bot.sendMessage(
+        chatId,
+        '⚠️ *Valor inválido.* Informe um número válido.\n\n📌 Exemplo: `/ajustar_saldo Nubank 2500`',
+        { parse_mode: 'Markdown' }
+      );
       return;
     }
 

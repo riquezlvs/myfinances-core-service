@@ -94,14 +94,28 @@ export async function handleMeta(
   // /meta <categoria> <limite>: o limite é o último token numérico.
   const limiteStr = partes[partes.length - 1];
   if (!/^\d+(?:[.,]\d{1,2})?$/.test(limiteStr)) {
-    await bot.sendMessage(chatId, `Use assim: /meta alimentacao 600\n\n${await opcoesCategorias(requestId)}`);
+    await bot.sendMessage(
+      chatId,
+      `🎯 *Como definir uma meta de gastos:*\n\n` +
+        `Uso: \`/meta <categoria> <limite>\`\n\n` +
+        `📌 *Exemplo:* \`/meta Alimentação 800\`\n\n` +
+        `${await opcoesCategorias(requestId)}`,
+      { parse_mode: 'Markdown' }
+    );
     return;
   }
   const limite = parseFloat(limiteStr.replace(',', '.'));
   const nomeCategoria = partes.slice(0, -1).join(' ');
 
   if (!nomeCategoria || limite <= 0) {
-    await bot.sendMessage(chatId, `Use assim: /meta alimentacao 600\n\n${await opcoesCategorias(requestId)}`);
+    await bot.sendMessage(
+      chatId,
+      `🎯 *Como definir uma meta de gastos:*\n\n` +
+        `Uso: \`/meta <categoria> <limite>\`\n\n` +
+        `📌 *Exemplo:* \`/meta Alimentação 800\`\n\n` +
+        `${await opcoesCategorias(requestId)}`,
+      { parse_mode: 'Markdown' }
+    );
     return;
   }
 

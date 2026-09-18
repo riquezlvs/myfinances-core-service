@@ -66,6 +66,28 @@ export async function callbackQueryHandler(
     return;
   }
 
+  if (primeiraParte === 'ajuda') {
+    const topico = (data.split(':')[1] || 'menu') as any;
+    await bot.answerCallbackQuery(query.id);
+    const { obterConteudoAjuda } = await import('../commands/ajuda');
+    const { texto, teclado } = obterConteudoAjuda(topico);
+    // Atualiza a mensagem existente se for mensagem com teclado para navegação fluida
+    try {
+      await bot.editMessageText(texto, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: teclado,
+      });
+    } catch {
+      await bot.sendMessage(chatId, texto, {
+        parse_mode: 'Markdown',
+        reply_markup: teclado,
+      });
+    }
+    return;
+  }
+
   if (primeiraParte === 'patrimonio') {
     const sub = data.split(':')[1];
     if (sub === 'atualizar_cdi') {
@@ -85,6 +107,25 @@ export async function callbackQueryHandler(
       await bot.answerCallbackQuery(query.id);
       const { handleSaldo } = await import('../commands/saldo');
       await handleSaldo(chatId, requestId, bot);
+      return;
+    }
+    if (sub === 'conciliar') {
+      await bot.answerCallbackQuery(query.id);
+      const { listarContas } = await import('../../services/accounts/accountService');
+      const { formatarReal } = await import('../../utils/formatters');
+      const contas = await listarContas(requestId);
+      const lista = contas.map((c) => `• *${c.name}* (${c.type}): R$ ${formatarReal(Number(c.balance))}`).join('\n');
+      await bot.sendMessage(
+        chatId,
+        `⚖️ *Conciliação de Saldos*\n\n` +
+          `Para corrigir ou atualizar o saldo de qualquer conta ou benefício com o valor real do seu banco, use:\n\n` +
+          `\`/ajustar_saldo <nome_da_conta> <novo_valor>\`\n\n` +
+          `📌 *Exemplos:*\n` +
+          `• \`/ajustar_saldo Nubank 2500\`\n` +
+          `• \`/ajustar_saldo VR 800\`\n\n` +
+          `🏦 *Suas contas cadastradas:*\n${lista || '_Nenhuma conta cadastrada_'}`,
+        { parse_mode: 'Markdown' }
+      );
       return;
     }
   }
@@ -246,6 +287,11 @@ async function manipularNavegacao(
     case 'comandos': {
       const { handleComandos } = await import('../commands/start');
       await handleComandos(chatId, bot);
+      break;
+    }
+    case 'ajuda': {
+      const { handleAjuda } = await import('../commands/ajuda');
+      await handleAjuda(chatId, 'menu', bot);
       break;
     }
     case 'novogasto':

@@ -109,7 +109,8 @@ export async function handleCartao(
     });
     await bot.sendMessage(
       chatId,
-      `❌ ${err instanceof Error ? err.message : 'Não consegui processar o comando. Tente novamente.'}`
+      `❌ ${err instanceof Error ? err.message : 'Não consegui processar o comando. Tente novamente.'}`,
+      { parse_mode: 'Markdown' }
     );
   }
 }
@@ -191,7 +192,11 @@ export function parseArgumentosAdd(partes: string[]): {
       return { nome: um, closing_day: Math.min(28, Math.max(1, Number(dois))), tipo: 'credit' };
     }
     throw new Error(
-      `Não entendi "${dois}". Use dia (número) ou tipo (credito|vr|va).\n\nEx: /cartao add ${um} 1 credito`
+      `⚠️ Não entendi "${dois}". Use dia (número) ou tipo (credito|vr|va).\n\n` +
+      `Para o segundo parâmetro, informe o *dia de fechamento* (1 a 28) ou o *tipo* (\`credito\`, \`vr\` ou \`va\`).\n\n` +
+      `📌 Exemplos:\n` +
+      `• Ex: /cartao add ${um} 1 credito\n` +
+      `• /cartao add ${um} 1 vr`
     );
   }
 
@@ -217,7 +222,11 @@ export function parseArgumentosAdd(partes: string[]): {
   }
 
   throw new Error(
-    `Não entendi o comando. Use: /cartao add <nome> [dia] [credito|vr|va]\n\nEx: /cartao add Santander 1 credito`
+    `⚠️ *Formato incorreto para cadastrar cartão.*\n\n` +
+    `Uso: \`/cartao add <nome> [dia_fechamento] [credito|vr|va]\`\n\n` +
+    `📌 *Exemplos:*\n` +
+    `• \`/cartao add Nubank 10 credito\`\n` +
+    `• \`/cartao add VR Benefício 1 vr\``
   );
 }
 

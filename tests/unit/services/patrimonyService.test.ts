@@ -101,9 +101,12 @@ describe('patrimonyService — Consolidação e Formatação de Patrimônio', ()
     const texto = formatarMensagemPatrimonio(summary);
     expect(texto).toContain('SEU PATRIMÔNIO CONSOLIDADO');
     expect(texto).toContain('18.177,50');
-    expect(texto).toContain('Disponível em Conta');
+    expect(texto).toContain('Liquidez Imediata Livre');
+    expect(texto).toContain('DISTRIBUIÇÃO DE ATIVOS');
+    expect(texto).toContain('Contas Correntes');
     expect(texto).toContain('Benefícios (VR / VA)');
     expect(texto).toContain('Caixinhas & Renda Fixa');
-    expect(texto).toContain('Faturas Abertas a Pagar');
+    expect(texto).toContain('PASSIVOS & OBRIGAÇÕES');
+    expect(texto).toContain('Total de Faturas a Pagar');
   });
 });

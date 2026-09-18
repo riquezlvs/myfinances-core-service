@@ -13,7 +13,15 @@ export async function handlePagoCommand(
   const { nome, valor } = separarNomeValor(argumentos);
 
   if (!nome) {
-    await bot.sendMessage(chatId, 'Use assim: /pago Irmã  ou  /pago Irmã 25');
+    await bot.sendMessage(
+      chatId,
+      '🤝 *Como dar baixa em um pagamento:*\n\n' +
+        'Uso: `/pago <nome> [valor]`\n\n' +
+        '📌 *Exemplos:*\n' +
+        '• `/pago Irmã` → Quita todo o valor que a pessoa devia.\n' +
+        '• `/pago Irmã 25` → Dá baixa parcial de R$ 25,00.',
+      { parse_mode: 'Markdown' }
+    );
     return;
   }
 

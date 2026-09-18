@@ -11,8 +11,10 @@ import { buildPoupancaKeyboard } from '../keyboards/transactionKeyboard';
 import { RODAPE_UX } from '../../config/constants';
 
 const ORIENTACAO =
-  '🎯 Use assim:\n• `/poupanca` — lista suas metas\n• `/poupanca definir viagem 5000 2026-12` — cria a meta (prazo opcional)\n' +
-  '• `/poupanca add viagem 500` — adiciona um aporte';
+  '🎯 *Como gerenciar metas de poupança:*\n\n' +
+  '• `/poupanca` — Lista todas as suas metas e progresso.\n' +
+  '• `/poupanca definir <nome> <valor> [AAAA-MM]` — Cria meta (ex: `/poupanca definir Viagem 5000 2026-12`).\n' +
+  '• `/poupanca add <nome> <valor>` — Registra aporte (ex: `/poupanca add Viagem 500`).';
 
 /** Lista as metas de poupança com o plano de aporte mensal calculado em código. */
 async function listar(chatId: number, requestId: string, bot: TelegramBot): Promise<void> {
@@ -21,8 +23,8 @@ async function listar(chatId: number, requestId: string, bot: TelegramBot): Prom
   if (metas.length === 0) {
     await bot.sendMessage(
       chatId,
-      `📭 Você ainda não tem metas de poupança.\n\n${ORIENTACAO}\n\n${RODAPE_UX}`,
-      { reply_markup: buildPoupancaKeyboard() }
+      `📭 *Você ainda não tem metas de poupança cadastradas.*\n\n${ORIENTACAO}\n\n${RODAPE_UX}`,
+      { parse_mode: 'Markdown', reply_markup: buildPoupancaKeyboard() }
     );
     return;
   }
@@ -77,7 +79,7 @@ export async function handlePoupanca(
       // penúltimo token quando casa com AAAA-MM.
       const resto = partes.slice(1);
       if (resto.length < 2) {
-        await bot.sendMessage(chatId, `⚠️ ${ORIENTACAO}`);
+        await bot.sendMessage(chatId, `⚠️ ${ORIENTACAO}`, { parse_mode: 'Markdown' });
         return;
       }
       let prazoISO: string | null = null;
@@ -89,14 +91,14 @@ export async function handlePoupanca(
       }
       const alvoStr = tokens[tokens.length - 1];
       if (!/^\d+(?:[.,]\d{1,2})?$/.test(alvoStr)) {
-        await bot.sendMessage(chatId, `⚠️ ${ORIENTACAO}`);
+        await bot.sendMessage(chatId, `⚠️ ${ORIENTACAO}`, { parse_mode: 'Markdown' });
         return;
       }
       const alvo = parseFloat(alvoStr.replace(',', '.'));
       const nome = tokens.slice(0, -1).join(' ');
 
       if (!nome || !Number.isFinite(alvo) || alvo <= 0) {
-        await bot.sendMessage(chatId, `⚠️ ${ORIENTACAO}`);
+        await bot.sendMessage(chatId, `⚠️ ${ORIENTACAO}`, { parse_mode: 'Markdown' });
         return;
       }
 
@@ -128,12 +130,12 @@ export async function handlePoupanca(
     if (acao === 'add') {
       const resto = partes.slice(1);
       if (resto.length < 2) {
-        await bot.sendMessage(chatId, `⚠️ ${ORIENTACAO}`);
+        await bot.sendMessage(chatId, `⚠️ ${ORIENTACAO}`, { parse_mode: 'Markdown' });
         return;
       }
       const valorStr = resto[resto.length - 1];
       if (!/^\d+(?:[.,]\d{1,2})?$/.test(valorStr)) {
-        await bot.sendMessage(chatId, `⚠️ ${ORIENTACAO}`);
+        await bot.sendMessage(chatId, `⚠️ ${ORIENTACAO}`, { parse_mode: 'Markdown' });
         return;
       }
       const valor = parseFloat(valorStr.replace(',', '.'));

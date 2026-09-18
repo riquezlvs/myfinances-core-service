@@ -10,15 +10,17 @@ export function buildStartKeyboard(): TelegramBot.InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [
+        { text: '📖 Como Usar (Guia & Exemplos)', callback_data: 'nav:ajuda' },
+      ],
+      [
+        { text: '💵 Saldo Livre (Safe-to-Spend)', callback_data: 'nav:saldo' },
         { text: '🏛 Meu Patrimônio', callback_data: 'nav:patrimonio' },
-        { text: '💵 Saldo (Safe-to-Spend)', callback_data: 'nav:saldo' },
       ],
       [
-        { text: '📦 Investimentos & CDI', callback_data: 'nav:investimentos' },
         { text: '💳 Minha Fatura', callback_data: 'nav:fatura' },
+        { text: '📊 Resumo do Mês', callback_data: 'nav:resumo' },
       ],
       [
-        { text: '📊 Resumo do Mês', callback_data: 'nav:resumo' },
         { text: '🧭 Ver Todos os Comandos', callback_data: 'nav:comandos' },
       ],
     ],
@@ -27,46 +29,34 @@ export function buildStartKeyboard(): TelegramBot.InlineKeyboardMarkup {
 
 /**
  * Onboarding pedagógico e humanizado do Guará IA (/start).
- * Ensina passo a passo a lógica do sistema: conciliar saldos, registrar
- * entradas, gastar com débito/crédito/VR e acompanhar patrimônio & CDI.
+ * Ensina a lógica sem sobrecarregar, apresentando exemplos claros.
  */
 export async function handleStart(chatId: number, bot: TelegramBot = getTelegramBot()): Promise<void> {
   const mensagem = [
-    '🦅 *Bem-vindo ao MyFinances (Guará IA) — Seu Assistente Financeiro!*',
+    '🦅 *Olá! Eu sou o Guará IA, seu copiloto financeiro pessoal.*',
     '',
-    'Aqui você controla suas finanças de ponta a ponta: *gastos*, *entradas (salário/VR)*, *saldo real vs livre* e seu *patrimônio total (caixinhas e ações)*.',
-    '',
-    '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-    '📖 *COMO USAR — GUIA EM 4 PASSOS*',
-    '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-    '',
-    '1️⃣ *Defina seus saldos iniciais*',
-    'Para eu saber quanto dinheiro você tem em cada conta ou benefício:',
-    '• `/ajustar\\_saldo Nubank 2500` → define o saldo em conta corrente',
-    '• `/ajustar\\_saldo VR 800` → define o saldo do seu vale refeição',
-    '• _Ou fale normalmente:_ "Meu saldo no Nubank é 2500"',
-    '',
-    '2️⃣ *Registre entradas de dinheiro*',
-    'Sempre que receber salário, freelance ou recarga:',
-    '• "Caiu meu salário de 5000 no Nubank"',
-    '• "Recarga do VR de 800"',
-    '• "Recebi 1200 de freela no Inter"',
-    '_Eu credito no saldo da conta e aumento seu patrimônio!_',
-    '',
-    '3️⃣ *Registre gastos do dia a dia*',
-    'Pode mandar por texto ou áudio sem se preocupar com comandos:',
-    '• "Almoço 42 no VR" → _debita do seu saldo de refeição_',
-    '• "Mercado 150 no débito" → _debita da conta bancária_',
-    '• "Tênis 350 em 3x no Nubank" → _entra na fatura de crédito_',
-    '• "Jantar 120 dividido em 3 com João e Maria" → _anota quem te deve_',
-    '',
-    '4️⃣ *Acompanhe seu Patrimônio & Investimentos*',
-    '• `/patrimonio` → Visão 360°: dinheiro em conta + VR + caixinhas + ações − faturas a pagar',
-    '• `/saldo` → *Safe-to-Spend*: quanto você realmente pode gastar sem comprometer a fatura do cartão',
-    '• `/investimentos` → Caixinhas (com rendimento automático % CDI e projeção de IR) e ações a mercado',
+    'Aqui você não perde tempo preenchendo formulários chatos: basta me mandar mensagens por *texto ou áudio*, como falaria no WhatsApp!',
     '',
     '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-    '💡 _Dica: Toque nos botões abaixo para testar as consultas agora mesmo!_',
+    '⚡ *O QUE VOCÊ PODE MANDAR AGORA:*',
+    '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+    '',
+    '💸 *1. Lançar Gastos do Dia a Dia*',
+    '• `"Almoço 35 no VR"`',
+    '• `"Mercado 120 no débito Nubank"`',
+    '• `"Tênis 400 em 4x no cartão"`',
+    '• `"Churrasco 150 dividido em 3 com Beto e Ana"`',
+    '',
+    '💰 *2. Registrar Entradas de Dinheiro*',
+    '• `"Caiu meu salário de 5000 no Nubank"`',
+    '• `"Recebi 800 de recarga no VR"`',
+    '',
+    '🏛 *3. Consultar sua Saúde Financeira*',
+    '• Toque em *Saldo Livre* para ver quanto pode gastar sem se endividar.',
+    '• Toque em *Meu Patrimônio* para ver contas, caixinhas CDI e ações.',
+    '',
+    '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+    '👉 *Dúvidas de como começar? Toque em "Como Usar" abaixo ou mande seu primeiro gasto!*',
   ].join('\n');
 
   await bot.sendMessage(chatId, mensagem, {

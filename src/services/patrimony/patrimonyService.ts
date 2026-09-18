@@ -4,6 +4,7 @@ import { calcularRendimentoCdi, obterTaxaCdiDiaria } from '../investments/yieldS
 import { obterCarteiraComCotacoes } from '../investments/assetPriceService';
 import { listarCartoes, calcularPeriodoFatura, getFaturaDoPeriodo } from '../cards/cardService';
 import { formatarReal } from '../../utils/formatters';
+import { gerarBarraTexto } from '../../utils/sparklines';
 import type { PatrimonySummary } from '../../types/investment';
 import type { Account } from '../../types/account';
 
@@ -107,14 +108,50 @@ export async function obterResumoPatrimonio(requestId: string = 'resumo-patrimon
 /**
  * Formata o resumo de patrimônio em Markdown rico para o Telegram.
  */
+/**
+ * Formata o resumo de patrimônio em Markdown rico para o Telegram.
+ * Apresenta estrutura em blocos: Ativos vs Passivos = Patrimônio Líquido,
+ * destaque de Liquidez Imediata Livre (Safe-to-Spend) e distribuição percentual
+ * com barras visuais por classe de ativo.
+ */
 export function formatarMensagemPatrimonio(summary: PatrimonySummary): string {
+  const totalLiquid = summary.liquidAssets.total;
+  const totalBenefits = summary.benefits.total;
+  const totalFixedNet = summary.fixedIncome.totalNet;
+  const totalVariable = summary.variableIncome.totalMarketValue;
+  const totalAtivos = totalLiquid + totalBenefits + totalFixedNet + totalVariable;
+  const totalPassivos = summary.openCreditInvoices.total;
+
+  // Safe-to-Spend imediato da conta corrente
+  const liquidezLivre = totalLiquid - totalPassivos;
+  const liquidezLivreFmt = liquidezLivre >= 0
+    ? `🟢 *R$ ${formatarReal(liquidezLivre)}*`
+    : `🔴 *-R$ ${formatarReal(Math.abs(liquidezLivre))} (Atenção!)*`;
+
+  const pct = (val: number): string => {
+    if (totalAtivos <= 0) return '0%';
+    const p = Math.round((val / totalAtivos) * 100);
+    return `${p}%`;
+  };
+
   const linhas: string[] = [];
 
-  linhas.push(`🏛 *SEU PATRIMÔNIO CONSOLIDADO*`);
-  linhas.push(`💰 *Patrimônio Líquido Total:* R$ ${formatarReal(summary.totalNetWorth)}\n`);
+  linhas.push('🏛 *SEU PATRIMÔNIO CONSOLIDADO*');
+  linhas.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  linhas.push(`💰 *Patrimônio Líquido:* R$ ${formatarReal(summary.totalNetWorth)}`);
+  linhas.push(`_(Total Ativos: R$ ${formatarReal(totalAtivos)} − Faturas: R$ ${formatarReal(totalPassivos)})_\n`);
+
+  linhas.push(`💧 *Liquidez Imediata Livre:* ${liquidezLivreFmt}`);
+  linhas.push(`_(Disponível em conta corrente após pagar as faturas abertas)_\n`);
+
+  linhas.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  linhas.push('📊 *DISTRIBUIÇÃO DE ATIVOS*');
+  linhas.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
   // 1. Contas Correntes
-  linhas.push(`🏦 *Disponível em Conta (Líquido):* R$ ${formatarReal(summary.liquidAssets.total)}`);
+  const barraLiquid = gerarBarraTexto(totalLiquid, totalAtivos, 8);
+  linhas.push(`\n🏦 *Contas Correntes:* R$ ${formatarReal(totalLiquid)} (${pct(totalLiquid)})`);
+  linhas.push(`\`[${barraLiquid}]\``);
   if (summary.liquidAssets.accounts.length === 0) {
     linhas.push(`  _(Nenhuma conta corrente cadastrada)_`);
   } else {
@@ -124,9 +161,11 @@ export function formatarMensagemPatrimonio(summary: PatrimonySummary): string {
   }
 
   // 2. Benefícios (VR / VA)
-  linhas.push(`\n🍽 *Benefícios (VR / VA):* R$ ${formatarReal(summary.benefits.total)}`);
+  const barraBenefits = gerarBarraTexto(totalBenefits, totalAtivos, 8);
+  linhas.push(`\n🍽 *Benefícios (VR / VA):* R$ ${formatarReal(totalBenefits)} (${pct(totalBenefits)})`);
+  linhas.push(`\`[${barraBenefits}]\``);
   if (summary.benefits.accounts.length === 0) {
-    linhas.push(`  _(Nenhum cartão de benefício com saldo)_`);
+    linhas.push(`  _(Nenhum cartão de benefício cadastrado)_`);
   } else {
     for (const b of summary.benefits.accounts) {
       linhas.push(`  • ${b.name}: R$ ${formatarReal(b.balance)}`);
@@ -134,7 +173,9 @@ export function formatarMensagemPatrimonio(summary: PatrimonySummary): string {
   }
 
   // 3. Caixinhas / Renda Fixa
-  linhas.push(`\n📈 *Caixinhas & Renda Fixa:* R$ ${formatarReal(summary.fixedIncome.totalNet)} (líquido est.)`);
+  const barraFixed = gerarBarraTexto(totalFixedNet, totalAtivos, 8);
+  linhas.push(`\n📈 *Caixinhas & Renda Fixa:* R$ ${formatarReal(totalFixedNet)} (${pct(totalFixedNet)})`);
+  linhas.push(`\`[${barraFixed}]\``);
   if (summary.fixedIncome.accounts.length === 0) {
     linhas.push(`  _(Nenhuma caixinha cadastrada)_`);
   } else {
@@ -147,7 +188,9 @@ export function formatarMensagemPatrimonio(summary: PatrimonySummary): string {
   }
 
   // 4. Renda Variável
-  linhas.push(`\n📊 *Renda Variável (Ações / FIIs / Cripto):* R$ ${formatarReal(summary.variableIncome.totalMarketValue)}`);
+  const barraVar = gerarBarraTexto(totalVariable, totalAtivos, 8);
+  linhas.push(`\n📊 *Renda Variável:* R$ ${formatarReal(totalVariable)} (${pct(totalVariable)})`);
+  linhas.push(`\`[${barraVar}]\``);
   if (summary.variableIncome.assets.length === 0) {
     linhas.push(`  _(Nenhum ativo cadastrado)_`);
   } else {
@@ -155,7 +198,7 @@ export function formatarMensagemPatrimonio(summary: PatrimonySummary): string {
       ? Math.round((summary.variableIncome.totalProfitLoss / summary.variableIncome.totalInvested) * 10000) / 100
       : 0;
     const sinal = summary.variableIncome.totalProfitLoss >= 0 ? '+' : '';
-    linhas.push(`  _Lucro/Prejuízo Total: ${sinal}R$ ${formatarReal(summary.variableIncome.totalProfitLoss)} (${sinal}${rentPct}%)_`);
+    linhas.push(`  _Rentabilidade Total: ${sinal}R$ ${formatarReal(summary.variableIncome.totalProfitLoss)} (${sinal}${rentPct}%)_`);
 
     for (const asset of summary.variableIncome.assets) {
       const precoAtual = asset.current_price ?? asset.average_price;
@@ -166,12 +209,17 @@ export function formatarMensagemPatrimonio(summary: PatrimonySummary): string {
     }
   }
 
-  // 5. Faturas de Cartão (Passivo)
-  if (summary.openCreditInvoices.total > 0) {
-    linhas.push(`\n💳 *Faturas Abertas a Pagar:* R$ ${formatarReal(summary.openCreditInvoices.total)}`);
+  // 5. Passivos (Faturas Abertas)
+  linhas.push('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  linhas.push('💳 *PASSIVOS & OBRIGAÇÕES*');
+  linhas.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  if (totalPassivos > 0) {
+    linhas.push(`*Total de Faturas a Pagar:* R$ ${formatarReal(totalPassivos)}`);
     for (const c of summary.openCreditInvoices.cards) {
       linhas.push(`  • ${c.name}: R$ ${formatarReal(c.amount)}`);
     }
+  } else {
+    linhas.push(`✅ _Nenhuma fatura de cartão em aberto no momento._`);
   }
 
   return linhas.join('\n');

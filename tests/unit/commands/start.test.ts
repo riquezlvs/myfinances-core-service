@@ -15,12 +15,10 @@ describe('handleStart (/start)', () => {
     expect(chatId).toBe(123456);
     expect(options.parse_mode).toBe('Markdown');
     expect(options.reply_markup).toEqual(buildStartKeyboard());
-    expect(text).toContain('Bem-vindo ao MyFinances');
-    expect(text).toContain('COMO USAR — GUIA EM 4 PASSOS');
-    expect(text).toContain('/ajustar\\_saldo');
-    expect(text).toContain('/patrimonio');
-    expect(text).toContain('/saldo');
-    expect(text).toContain('/investimentos');
+    expect(text).toContain('Guará IA, seu copiloto financeiro pessoal');
+    expect(text).toContain('Lançar Gastos do Dia a Dia');
+    expect(text).toContain('Registrar Entradas de Dinheiro');
+    expect(text).toContain('Consultar sua Saúde Financeira');
 
     // Validação de Markdown do Telegram: asteriscos (*) e underscores não escapados (_) devem ser estritamente pares
     const semEscapes = text.replace(/\\([_*`\[])/g, '');

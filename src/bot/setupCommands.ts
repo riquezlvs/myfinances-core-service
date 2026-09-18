@@ -6,7 +6,8 @@ export async function setupCommands(): Promise<void> {
   const bot = getTelegramBot();
 
   await bot.setMyCommands([
-    { command: 'start', description: 'Ver como usar o bot' },
+    { command: 'start', description: 'Início e visão geral' },
+    { command: 'ajuda', description: 'Central de ajuda, tutoriais e exemplos' },
     { command: 'patrimonio', description: 'Ver patrimônio consolidado e alocação' },
     { command: 'saldo', description: 'Saldo real vs Saldo livre (Safe-to-Spend)' },
     { command: 'investimentos', description: 'Caixinhas (% CDI) e Renda Variável' },

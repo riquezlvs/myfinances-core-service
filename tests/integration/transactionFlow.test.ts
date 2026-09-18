@@ -320,7 +320,7 @@ describe('messageHandler — roteamento de comandos diretos', () => {
 
     expect(bot.sendMessage).toHaveBeenCalledTimes(1);
     const texto = bot.sendMessage.mock.calls[0][1];
-    expect(texto).toContain('Bem-vindo ao MyFinances');
+    expect(texto).toContain('Guará IA, seu copiloto financeiro pessoal');
     expect(mockClassificarIntencao).not.toHaveBeenCalled();
   });
 

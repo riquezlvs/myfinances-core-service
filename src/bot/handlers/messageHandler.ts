@@ -10,6 +10,7 @@ import { extrairNomeEValorDeFrase } from '../../utils/textParsers';
 import { formatarPagamento, formatarReal, formatarDataCurta } from '../../utils/formatters';
 import { registrarEResponderGasto } from './novoGasto';
 import { handleStart, handleComandos } from '../commands/start';
+import { handleAjuda } from '../commands/ajuda';
 import { handleResumo } from '../commands/resumo';
 import { handleDividas } from '../commands/dividas';
 import { handleGastos } from '../commands/gastos';
@@ -350,10 +351,115 @@ async function handleConsulta(
   }
 }
 
-async function handleOutros(chatId: number, bot: TelegramBot): Promise<void> {
+async function handleOutros(chatId: number, bot: TelegramBot, texto?: string): Promise<void> {
+  const t = (texto || '').toLowerCase();
+
+  // Heurística 1: Usuário digitou apenas valores/números sem dizer o que era
+  if (/^r?\$?\s*\d+([.,]\d+)?$/i.test(t.trim()) || /(?:^|\s)\d+([.,]\d+)?\s*(?:reais|conto|pila)?$/i.test(t.trim())) {
+    await bot.sendMessage(
+      chatId,
+      '💡 *Notei que você digitou um valor, mas faltou informar o que foi.*\n\n' +
+        '• Se for um gasto: `"Almoço 35 no débito"` ou `"Farmácia 40 no crédito"`\n' +
+        '• Se for entrada: `"Recebi 50 via pix"` ou `"Salário 3000 no Nubank"`',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '📖 Ver Exemplos no Tutorial', callback_data: 'nav:ajuda' }],
+          ],
+        },
+      }
+    );
+    return;
+  }
+
+  // Heurística 2: Menção a cartão ou fatura
+  if (t.includes('fatura') || t.includes('cartao') || t.includes('cartão') || t.includes('limite')) {
+    await bot.sendMessage(
+      chatId,
+      '💳 *Parece que você tem uma dúvida sobre cartões ou faturas.*\n\n' +
+        '• Para ver seus cartões cadastrados: use `/cartao`\n' +
+        '• Para ver o valor e fechamento da sua fatura: use `/fatura`\n' +
+        '• Para cadastrar um novo: `/cartao add Nubank 10 credito`',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '💳 Minha Fatura', callback_data: 'nav:fatura' },
+              { text: '📖 Guia de Cartões', callback_data: 'ajuda:cartoes' },
+            ],
+          ],
+        },
+      }
+    );
+    return;
+  }
+
+  // Heurística 3: Menção a saldo, conta ou patrimônio
+  if (t.includes('saldo') || t.includes('patrimonio') || t.includes('patrimônio') || t.includes('quanto tenho')) {
+    await bot.sendMessage(
+      chatId,
+      '💵 *Quer saber quanto dinheiro você tem?*\n\n' +
+        '• `/saldo` — Saldo bancário real vs saldo livre (Safe-to-Spend).\n' +
+        '• `/patrimonio` — Balanço consolidado (contas, caixinhas e ações).\n' +
+        '• `/ajustar_saldo Conta Valor` — Para corrigir o saldo inicial.',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '💵 Saldo Livre', callback_data: 'nav:saldo' },
+              { text: '🏛 Patrimônio Total', callback_data: 'nav:patrimonio' },
+            ],
+          ],
+        },
+      }
+    );
+    return;
+  }
+
+  // Heurística 4: Palavras de exclusão ou cancelamento
+  if (t.includes('apagar') || t.includes('deletar') || t.includes('excluir') || t.includes('cancela')) {
+    await bot.sendMessage(
+      chatId,
+      '🔒 *Para sua segurança, ações de exclusão exigem comandos explícitos:*\n\n' +
+        '• `/desfazer` — Cancela o último lançamento que você fez.\n' +
+        '• `/apagar <id>` — Remove um gasto específico pelo ID (ex: `/apagar 42`).\n' +
+        '• `/cartao remover <nome>` — Desativa um cartão.',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🧭 Todos os Comandos', callback_data: 'nav:comandos' }],
+          ],
+        },
+      }
+    );
+    return;
+  }
+
+  // Fallback geral amigável com botões de ação rápida
   await bot.sendMessage(
     chatId,
-    'Não entendi muito bem 🤔 Mande um gasto (ex: "Gastei 30 no mercado") ou use /start para ver os comandos.'
+    '🤔 *Não entendi muito bem o que você deseja fazer.*\n\n' +
+      'Você pode me mandar gastos naturalmente (ex: `"Gastei 45 no mercado"` ou áudio), ' +
+      'avisar entradas (`"Caiu meu salário de 3000"`) ou usar um dos atalhos abaixo:',
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '📖 Guia & Exemplos (/ajuda)', callback_data: 'nav:ajuda' },
+            { text: '📊 Resumo do Mês', callback_data: 'nav:resumo' },
+          ],
+          [
+            { text: '🧭 Ver Todos os Comandos', callback_data: 'nav:comandos' },
+            { text: '💵 Consultar Saldo', callback_data: 'nav:saldo' },
+          ],
+        ],
+      },
+    }
   );
 }
 
@@ -613,7 +719,12 @@ async function rotearComando(
     await handleStart(chatId, bot);
     return true;
   }
-  if (texto.startsWith('/comandos') || texto.startsWith('/ajuda')) {
+  if (texto.startsWith('/ajuda') || texto.startsWith('/tutorial')) {
+    log('info', 'Comando: /ajuda', { requestId });
+    await handleAjuda(chatId, 'menu', bot);
+    return true;
+  }
+  if (texto.startsWith('/comandos')) {
     log('info', 'Comando: /comandos', { requestId });
     await handleComandos(chatId, bot);
     return true;
@@ -915,7 +1026,7 @@ async function processarMensagemAutorizada(
         break;
       case 'OUTROS':
       default:
-        await handleOutros(chatId, bot);
+        await handleOutros(chatId, bot, texto);
         break;
     }
 

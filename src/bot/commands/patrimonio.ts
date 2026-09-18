@@ -12,8 +12,15 @@ export async function handlePatrimonio(chatId: number, requestId: string, bot: T
       reply_markup: {
         inline_keyboard: [
           [
-            { text: '🔄 Atualizar Rendimentos CDI', callback_data: 'patrimonio:atualizar_cdi' },
-            { text: '🏦 Ver Saldos', callback_data: 'patrimonio:saldos' },
+            { text: '🔄 Atualizar CDI', callback_data: 'patrimonio:atualizar_cdi' },
+            { text: '📈 Investimentos', callback_data: 'nav:investimentos' },
+          ],
+          [
+            { text: '💵 Saldo Livre', callback_data: 'nav:saldo' },
+            { text: '💳 Faturas', callback_data: 'nav:fatura' },
+          ],
+          [
+            { text: '⚖️ Conciliar Contas', callback_data: 'patrimonio:conciliar' },
           ],
         ],
       },

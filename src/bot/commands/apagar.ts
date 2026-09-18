@@ -13,14 +13,25 @@ export async function handleApagar(
   const id = parseInt(argumento.trim(), 10);
 
   if (!Number.isFinite(id)) {
-    await bot.sendMessage(chatId, 'Use assim: /apagar 42  (o número aparece em /gastos ou /fatura)');
+    await bot.sendMessage(
+      chatId,
+      '🗑 *Como apagar um lançamento:*\n\n' +
+        'Uso: `/apagar <id>`\n\n' +
+        '📌 *Exemplo:* `/apagar 42`\n\n' +
+        '💡 _Dica: Você encontra o número #ID nos seus lançamentos recentes usando `/gastos` ou `/fatura`._',
+      { parse_mode: 'Markdown' }
+    );
     return;
   }
 
   const resultado = await apagarTransacaoPorId(id, requestId);
 
   if (!resultado.apagou) {
-    await bot.sendMessage(chatId, `❓ Não encontrei nenhum gasto com o ID #${id}.`);
+    await bot.sendMessage(
+      chatId,
+      `❓ Não encontrei nenhum gasto com o ID #${id}.\n\nUse \`/gastos\` para consultar os lançamentos recentes.`,
+      { parse_mode: 'Markdown' }
+    );
     return;
   }
 
