@@ -39,8 +39,9 @@ O MyFinances permite registrar gastos, consultar resumos, dividir contas, criar 
 ## Funcionalidades
 
 ### Principais
+- **Central de Ajuda Interativa & Onboarding**: `/ajuda` navegável por tópicos com inline buttons, onboarding `/start` enxuto e fallbacks de erro inteligentes com análise contextual.
 - **Registro de Entradas & Saldos**: Salários, recargas de benefícios (VR/VA), freelas e PIX recebidos alimentam o saldo real da conta indicada.
-- **Patrimônio Consolidado**: Visão geral de Ativos Líquidos, Benefícios (VR/VA), Caixinhas (% CDI) e Renda Variável, descontando faturas abertas.
+- **Patrimônio Consolidado com Alocação & Barras Gráficas**: Visão em blocos (Ativos vs Passivos = Patrimônio Líquido), % de distribuição por classe com barras unicode, e destaque de Liquidez Imediata Livre.
 - **Modelo Híbrido Safe-to-Spend**: Saldo Real em conta vs Saldo Livre para gastar (descontando faturas de cartão de crédito em aberto).
 - **Caixinhas com Rendimento Automático (% CDI)**: Integração com API oficial do Banco Central (SGS Série 12), projeção de dias úteis e alíquotas regressivas de IR (22,5% a 15%) e IOF.
 - **Renda Variável a Mercado**: Ações, FIIs e Criptos por ticker com cotação pública em tempo real e rentabilidade sobre o preço médio.
@@ -158,15 +159,17 @@ npm run typecheck
 
 | Comando | Descrição |
 |---|---|
-| `/start` | Introdução e lista completa de comandos |
-| `/patrimonio` | Painel de patrimônio consolidado (líquido, VR/VA, caixinhas, ações, faturas) |
-| `/saldo` | Visão de saldo real em conta vs saldo livre (Safe-to-Spend) e benefícios |
-| `/investimentos` | Caixinhas (% CDI com rendimento e IR/IOF) e carteira de ações/FIIs |
-| `/ajustar_saldo <conta> <valor>` | Definir saldo inicial ou conciliar valor atual da conta/VR |
+| `/start` | Onboarding pedagógico e botões de início rápido |
+| `/ajuda` ou `/tutorial` | Central interativa de tutoriais navegável por tópicos |
+| `/comandos` | Índice completo e categorizado de comandos |
+| `/patrimonio` | Visão estruturada (Ativos vs Passivos = Líquido, % de alocação e Safe-to-Spend) |
+| `/saldo` | Saldo real vs Saldo livre (Safe-to-Spend) |
+| `/investimentos` | Caixinhas (% CDI) e Renda Variável |
+| `/ajustar_saldo <conta> <valor>` | Conciliar saldo de conta ou VR |
 | `/resumo` | Resumo do mês atual |
 | `/fatura` | Fatura do cartão de crédito |
 | `/dividas` | Quem te deve |
-| `/gastos [n]` | Últimos n lançamentos |
+| `/gastos [n]` | Últimos gastos registrados |
 | `/pago <nome> [valor]` | Registrar pagamento recebido |
 | `/desfazer` | Desfazer último gasto |
 | `/apagar <id>` | Apagar lançamento específico |

@@ -127,34 +127,55 @@ Você sabe exatamente que tem apenas **R$ 600,00** verdadeiramente livres, prote
 
 ## 🏛 Passo 5: Seu Patrimônio Consolidado (`/patrimonio`)
 
-O comando `/patrimonio` reúne tudo o que você tem e tudo o que você deve em um único relatório consolidado:
+O comando `/patrimonio` reúne tudo o que você tem e tudo o que você deve em uma visão contábil em blocos, com porcentagens e barras gráficas:
 
-$$\text{Patrimônio Líquido} = (\text{Contas} + \text{VR/VA} + \text{Caixinhas Líquidas} + \text{Renda Variável}) - \text{Faturas de Cartão}$$
+$$\text{Patrimônio Líquido} = \text{Total de Ativos} - \text{Total de Faturas de Cartão}$$
 
 ### Relatório retornado pelo `/patrimonio`:
 ```text
 🏛 SEU PATRIMÔNIO CONSOLIDADO
-💰 Patrimônio Líquido Total: R$ 24.580,00
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 Patrimônio Líquido: R$ 24.580,00
+_(Total Ativos: R$ 26.980,00 − Faturas: R$ 2.400,00)_
 
-🏦 Disponível em Conta (Líquido): R$ 3.000,00
+💧 Liquidez Imediata Livre: 🟢 R$ 600,00
+_(Disponível em conta corrente após pagar as faturas abertas)_
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 DISTRIBUIÇÃO DE ATIVOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🏦 Contas Correntes: R$ 3.000,00 (11%)
+`[█░░░░░░░]`
   • Nubank: R$ 3.000,00
 
-🍽 Benefícios (VR / VA): R$ 780,00
+🍽 Benefícios (VR / VA): R$ 780,00 (3%)
+`[░░░░░░░░]`
   • VR: R$ 780,00
 
-📈 Caixinhas & Renda Fixa: R$ 15.200,00 (líquido est.)
-  • Reserva de Emergência (115% CDI): R$ 15.000,00 (rendeu bruto +R$ 230,00)
+📈 Caixinhas & Renda Fixa: R$ 15.200,00 (56%)
+`[████░░░░]`
+  • Reserva de Emergência (115% CDI): R$ 15.000,00 _(rendeu bruto +R$ 230,00)_
 
-📊 Renda Variável (Ações / FIIs / Cripto): R$ 8.000,00
-  _Lucro/Prejuízo Total: +R$ 450,00 (+5.96%)_
+📊 Renda Variável: R$ 8.000,00 (30%)
+`[██░░░░░░]`
+  _Rentabilidade Total: +R$ 450,00 (+5.96%)_
   • PETR4: 100x a R$ 38,50 = R$ 3.850,00 (+8.2%)
   • HGLG11: 25x a R$ 166,00 = R$ 4.150,00 (+3.9%)
 
-💳 Faturas Abertas a Pagar: R$ 2.400,00
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💳 PASSIVOS & OBRIGAÇÕES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*Total de Faturas a Pagar:* R$ 2.400,00
   • Nubank: R$ 2.400,00
 ```
 
-> **Dica Interativa:** A mensagem inclui um botão `[🔄 Atualizar Rendimentos CDI]`. Ao tocar nele, o bot consulta o Banco Central, recalcula os rendimentos proporcionais da caixinha e atualiza seu saldo!
+> **Ações Rápidas Inline:** A mensagem acompanha 5 botões integrados:
+> - `[🔄 Atualizar CDI]`: recalcula e credita rendimentos no saldo.
+> - `[📈 Investimentos]`: detalha caixinhas e cotações.
+> - `[💵 Saldo Livre]`: consulta imediata ao Safe-to-Spend.
+> - `[💳 Faturas]`: detalhamento das faturas do cartão.
+> - `[⚖️ Conciliar Contas]`: atalho para conferir e ajustar saldos com `/ajustar_saldo`.
 
 ---
 
@@ -183,9 +204,10 @@ No comando `/investimentos`, você vê o extrato transparente:
 
 | Comando | O que faz |
 |---|---|
-| `/start` | Mostra o guia de início rápido e botões interativos |
+| `/start` | Onboarding pedagógico e botões de início rápido |
+| `/ajuda` ou `/tutorial` | Central interativa de tutoriais navegável por tópicos |
 | `/comandos` | Lista completa e categorizada de todos os comandos |
-| `/patrimonio` | Visão 360° do patrimônio líquido consolidado |
+| `/patrimonio` | Visão 360° do patrimônio líquido consolidado com barras de alocação |
 | `/saldo` | Saldo bancário real vs Safe-to-Spend (saldo livre) |
 | `/investimentos` | Caixinhas (% CDI com rendimento e IR) e ações |
 | `/ajustar_saldo <conta> <valor>` | Define ou concilia o saldo de uma conta ou VR |
