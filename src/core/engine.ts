@@ -16,9 +16,12 @@ import { inferirMetodoPagamento } from '../services/cards/paymentInference';
 import { processarPagamento, getSaldoTerceiros } from '../services/debts/debtService';
 import { calcularSafeToSpend, listarContas } from '../services/accounts/accountService';
 import { listarMetas } from '../services/budgets/budgetService';
+import { obterResumoPatrimonio } from '../services/patrimony/patrimonyService';
+import { listarMetasPoupanca } from '../services/savings/savingsService';
 import { formatarReal, formatarMetodo, formatarDataCurta } from '../utils/formatters';
 import { extrairNomeEValorDeFrase } from '../utils/textParsers';
-import { mesAnoAtual, rotuloDoMes, mesAnoNaJanela } from '../utils/month';
+import { getSupabaseClient } from '../clients/supabaseClient';
+import { mesAnoAtual, rotuloDoMes, mesAnoNaJanela, intervaloDoMes } from '../utils/month';
 import { MAX_MONTH_LOOKBACK } from '../config/constants';
 import type { IntentPayload, ParsedTransaction } from '../types/transaction';
 
@@ -380,6 +383,122 @@ export async function obterUltimosGastosUnificado(limite: number, requestId: str
     mensagem: `Últimos ${gastos.length} gastos encontrados.`,
     dados: {
       gastos,
+    },
+  };
+}
+
+/** Retorna a consolidação completa de patrimônio líquido (ativos e passivos) */
+export async function obterPatrimonioUnificado(requestId: string): Promise<EngineOutput> {
+  const patrimony = await obterResumoPatrimonio(requestId);
+  return {
+    sucesso: true,
+    tipo: 'consulta',
+    mensagem: `Patrimônio líquido total consolidado: R$ ${formatarReal(patrimony.totalNetWorth)}.`,
+    dados: patrimony,
+  };
+}
+
+/** Retorna as metas de poupança e caixinhas */
+export async function obterPoupancaUnificado(requestId: string): Promise<EngineOutput> {
+  const metas = await listarMetasPoupanca(requestId);
+  return {
+    sucesso: true,
+    tipo: 'consulta',
+    mensagem: `${metas.length} metas de poupança cadastradas.`,
+    dados: {
+      metas,
+    },
+  };
+}
+
+export interface ExtratoFiltro {
+  mesAno?: string;
+  tipo?: 'Todos' | 'Entradas' | 'Saídas' | string;
+  busca?: string;
+  limite?: number;
+}
+
+/**
+ * Retorna extrato completo e consolidado de um mês com entradas, saídas, agrupamentos e estatísticas reais
+ */
+export async function obterExtratoCompletoUnificado(
+  filtro: ExtratoFiltro,
+  requestId: string
+): Promise<EngineOutput> {
+  const mes = filtro.mesAno ?? mesAnoAtual();
+  const intervalo = intervaloDoMes(mes);
+  if (!intervalo) {
+    return {
+      sucesso: false,
+      tipo: 'consulta',
+      mensagem: `Mês inválido: ${mes}`,
+    };
+  }
+
+  const supabase = getSupabaseClient();
+
+  // Busca todas as transações do mês com categoria e conta associada
+  let query = supabase
+    .from('transactions')
+    .select(`
+      display_id,
+      description,
+      total_amount,
+      occurred_at,
+      payment_method,
+      entry_type,
+      raw_input,
+      installment_number,
+      installment_total,
+      categories (id, name),
+      accounts (id, name, type)
+    `)
+    .gte('occurred_at', intervalo.inicioISO)
+    .lt('occurred_at', intervalo.fimISO)
+    .order('occurred_at', { ascending: false });
+
+  const { data, error } = await query;
+  if (error) {
+    log('error', 'Erro ao buscar extrato completo no Supabase', { requestId, erro: error.message });
+    throw new Error(`Erro ao buscar extrato: ${error.message}`);
+  }
+
+  const todas = (data ?? []) as any[];
+
+  // Cálculos consolidados do mês
+  let totalEntradas = 0;
+  let countEntradas = 0;
+  let totalSaidas = 0;
+  let countSaidas = 0;
+
+  for (const t of todas) {
+    const valor = Number(t.total_amount) || 0;
+    const isIncome = t.entry_type === 'income';
+    if (isIncome) {
+      totalEntradas += valor;
+      countEntradas++;
+    } else {
+      totalSaidas += valor;
+      countSaidas++;
+    }
+  }
+
+  const liquidoNoMes = totalEntradas - totalSaidas;
+
+  return {
+    sucesso: true,
+    tipo: 'consulta',
+    mensagem: `Extrato de ${rotuloDoMes(mes)} carregado com sucesso.`,
+    dados: {
+      mesAno: mes,
+      rotuloMes: rotuloDoMes(mes),
+      totalEntradas,
+      countEntradas,
+      totalSaidas,
+      countSaidas,
+      liquidoNoMes,
+      totalLancamentos: todas.length,
+      itens: todas,
     },
   };
 }

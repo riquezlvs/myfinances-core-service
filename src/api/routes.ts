@@ -1,7 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
 import { log } from '../utils/logger';
-import { processarTextoEntrada, obterResumoUnificado, obterSaldoUnificado, obterUltimosGastosUnificado } from '../core/engine';
+import {
+  processarTextoEntrada,
+  obterResumoUnificado,
+  obterSaldoUnificado,
+  obterUltimosGastosUnificado,
+  obterPatrimonioUnificado,
+  obterPoupancaUnificado,
+  obterExtratoCompletoUnificado,
+} from '../core/engine';
 
 /**
  * Utilitário para adicionar cabeçalhos CORS a todas as respostas HTTP
@@ -98,10 +106,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   // Rota: GET /api/dashboard
   if (url === '/api/dashboard' && method === 'GET') {
     try {
-      const [resumo, saldo, gastos] = await Promise.all([
+      const [resumo, saldo, gastos, patrimonio, poupanca] = await Promise.all([
         obterResumoUnificado(requestId),
         obterSaldoUnificado(requestId),
         obterUltimosGastosUnificado(10, requestId),
+        obterPatrimonioUnificado(requestId).catch(() => null),
+        obterPoupancaUnificado(requestId).catch(() => null),
       ]);
 
       sendJson(res, 200, {
@@ -110,6 +120,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
           resumo: resumo.dados,
           saldo: saldo.dados,
           recentes: gastos.dados?.gastos || [],
+          patrimonio: patrimonio?.dados || null,
+          poupanca: poupanca?.dados?.metas || [],
         },
       });
       return true;
@@ -118,6 +130,25 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 500, {
         sucesso: false,
         mensagem: 'Erro ao carregar métricas do dashboard.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: GET /api/extrato
+  if (url.startsWith('/api/extrato') && method === 'GET') {
+    try {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const mesAno = parsedUrl.searchParams.get('mes') || parsedUrl.searchParams.get('mesAno') || undefined;
+
+      const resultado = await obterExtratoCompletoUnificado({ mesAno }, requestId);
+      sendJson(res, 200, resultado);
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao obter dados de /api/extrato', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: 'Erro ao carregar dados do extrato.',
       });
       return true;
     }
