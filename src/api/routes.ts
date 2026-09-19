@@ -12,6 +12,8 @@ import {
   gerarPreviewTransacao,
   confirmarTransacaoUnificado,
 } from '../core/engine';
+import { obterDadosGraficosDashboard } from '../services/transactions/transactionService';
+import { obterCartoesDetalhados, cadastrarNovoCartao, removerCartao } from '../services/cards/cardService';
 
 /**
  * Utilitário para adicionar cabeçalhos CORS a todas as respostas HTTP
@@ -176,12 +178,16 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   // Rota: GET /api/dashboard
   if (url === '/api/dashboard' && method === 'GET') {
     try {
-      const [resumo, saldo, gastos, patrimonio, poupanca] = await Promise.all([
+      const [resumo, saldo, gastos, patrimonio, poupanca, graficos] = await Promise.all([
         obterResumoUnificado(requestId),
         obterSaldoUnificado(requestId),
         obterUltimosGastosUnificado(10, requestId),
         obterPatrimonioUnificado(requestId).catch(() => null),
         obterPoupancaUnificado(requestId).catch(() => null),
+        obterDadosGraficosDashboard(requestId).catch((err) => {
+          log('warn', 'Erro ao obter dados gráficos do dashboard', { erro: err.message });
+          return null;
+        }),
       ]);
 
       sendJson(res, 200, {
@@ -192,6 +198,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
           recentes: gastos.dados?.gastos || [],
           patrimonio: patrimonio?.dados || null,
           poupanca: poupanca?.dados?.metas || [],
+          graficos: graficos || null,
         },
       });
       return true;
@@ -219,6 +226,68 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 500, {
         sucesso: false,
         mensagem: 'Erro ao carregar dados do extrato.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: GET /api/cards (Lista cartões com faturas calculadas e gastos)
+  if (url === '/api/cards' && method === 'GET') {
+    try {
+      const cartoes = await obterCartoesDetalhados(requestId);
+      sendJson(res, 200, {
+        sucesso: true,
+        dados: cartoes,
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao obter lista de cartões', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao carregar cartões.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/cards (Cadastra ou atualiza cartão)
+  if (url === '/api/cards' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      if (!body?.name || !body?.closing_day) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'Campos "name" e "closing_day" são obrigatórios.',
+        });
+        return true;
+      }
+
+      const cartao = await cadastrarNovoCartao(
+        {
+          name: String(body.name),
+          closing_day: Number(body.closing_day),
+          due_day: body.due_day ? Number(body.due_day) : undefined,
+          credit_limit: body.credit_limit ? Number(body.credit_limit) : 0,
+          card_type: body.card_type || 'credit',
+          card_holder: body.card_holder ? String(body.card_holder) : undefined,
+          last_four_digits: body.last_four_digits ? String(body.last_four_digits) : undefined,
+          color_theme: body.color_theme ? String(body.color_theme) : 'titanium',
+          is_virtual: Boolean(body.is_virtual),
+        },
+        requestId
+      );
+
+      sendJson(res, 201, {
+        sucesso: true,
+        dados: cartao,
+        mensagem: 'Cartão salvo com sucesso!',
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao cadastrar cartão', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao cadastrar cartão.',
       });
       return true;
     }

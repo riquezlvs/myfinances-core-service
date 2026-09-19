@@ -151,7 +151,24 @@ export async function registrarTransacao(
       return { displayIds: [data.display_id as number] };
     }
 
-    const parcelas = calcularParcelas(dados.total_amount, dados.installment_total as number, dados.occurred_at);
+    let closingDay: number | null = null;
+    if (dados.payment_method === 'credit_card' && dados.card_id) {
+      const { data: cartao } = await supabase
+        .from('cards')
+        .select('closing_day')
+        .eq('id', dados.card_id)
+        .maybeSingle();
+      if (cartao?.closing_day) {
+        closingDay = cartao.closing_day;
+      }
+    }
+
+    const parcelas = calcularParcelas(
+      dados.total_amount,
+      dados.installment_total as number,
+      dados.occurred_at,
+      closingDay
+    );
 
     // Divide my_share_amount e third_party_share_amount proporcionalmente a
     // cada parcela, mantendo a mesma proporção do valor total (ex: se 50% é
@@ -247,46 +264,106 @@ export async function atualizarMetodo(displayId: number, metodo: PaymentMethod, 
   });
 }
 
-export async function apagarTransacaoComGrupo(
+export type EscopoExclusaoParcela = 'apenas_esta' | 'esta_e_seguintes' | 'todas';
+
+/**
+ * Apaga transações/parcelas conforme o escopo selecionado:
+ * - 'apenas_esta': remove somente a linha correspondente ao displayId
+ * - 'esta_e_seguintes': remove esta e todas as parcelas com installment_number >= parcela atual
+ * - 'todas': remove todo o grupo vinculado a installment_group_id
+ */
+export async function apagarParcelasPorEscopo(
   displayId: number,
+  escopo: EscopoExclusaoParcela,
   requestId: string
 ): Promise<{ displayIds: number[] }> {
-  return withTiming('apagar transação (com grupo de parcelas, se houver)', { requestId, displayId }, async () => {
+  return withTiming('apagar parcelas por escopo', { requestId, displayId, escopo }, async () => {
     const supabase = getSupabaseClient();
 
     const { data: linha, error: erroBusca } = await supabase
       .from('transactions')
-      .select('display_id, installment_group_id')
+      .select('display_id, installment_group_id, installment_number')
       .eq('display_id', displayId)
       .maybeSingle();
 
     if (erroBusca) throw new Error(`Erro ao buscar transação ${displayId}: ${erroBusca.message}`);
     if (!linha) return { displayIds: [] };
 
-    if (!linha.installment_group_id) {
+    // Se não faz parte de um grupo de parcelas, apaga apenas a própria linha
+    if (!linha.installment_group_id || escopo === 'apenas_esta') {
       const { error } = await supabase.from('transactions').delete().eq('display_id', displayId);
       if (error) throw new Error(`Erro ao apagar transação ${displayId}: ${error.message}`);
       return { displayIds: [displayId] };
     }
 
-    const { data: apagadas, error: erroDelete } = await supabase
+    let query = supabase
       .from('transactions')
       .delete()
-      .eq('installment_group_id', linha.installment_group_id)
-      .select('display_id');
+      .eq('installment_group_id', linha.installment_group_id);
 
-    if (erroDelete) {
-      throw new Error(`Erro ao apagar grupo de parcelas ${linha.installment_group_id}: ${erroDelete.message}`);
+    if (escopo === 'esta_e_seguintes' && linha.installment_number != null) {
+      query = query.gte('installment_number', linha.installment_number);
     }
 
-    log('info', 'Grupo de parcelas apagado', {
+    const { data: apagadas, error: erroDelete } = await query.select('display_id');
+    if (erroDelete) {
+      throw new Error(`Erro ao apagar parcelas no escopo ${escopo}: ${erroDelete.message}`);
+    }
+
+    log('info', 'Parcelas apagadas com sucesso', {
       requestId,
+      escopo,
       installmentGroupId: linha.installment_group_id,
       qtd_linhas: apagadas?.length ?? 0,
     });
 
     return { displayIds: (apagadas ?? []).map((d) => d.display_id as number) };
   });
+}
+
+/**
+ * Antecipa parcelas futuras de uma compra para uma data específica (ou fatura/mês atual),
+ * mantendo o grupo e o installment_number para fins de histórico e rastreabilidade.
+ */
+export async function anteciparParcelas(
+  installmentGroupId: string,
+  installmentNumbersParaAntecipar: number[],
+  novaDataISO: string,
+  requestId: string
+): Promise<{ displayIds: number[] }> {
+  return withTiming(
+    'antecipar parcelas',
+    { requestId, installmentGroupId, parcelas: installmentNumbersParaAntecipar, novaDataISO },
+    async () => {
+      const supabase = getSupabaseClient();
+
+      const { data: atualizadas, error } = await supabase
+        .from('transactions')
+        .update({ occurred_at: novaDataISO })
+        .eq('installment_group_id', installmentGroupId)
+        .in('installment_number', installmentNumbersParaAntecipar)
+        .select('display_id');
+
+      if (error) {
+        throw new Error(`Erro ao antecipar parcelas: ${error.message}`);
+      }
+
+      log('info', 'Parcelas antecipadas com sucesso', {
+        requestId,
+        installmentGroupId,
+        qtd_atualizadas: atualizadas?.length ?? 0,
+      });
+
+      return { displayIds: (atualizadas ?? []).map((d) => d.display_id as number) };
+    }
+  );
+}
+
+export async function apagarTransacaoComGrupo(
+  displayId: number,
+  requestId: string
+): Promise<{ displayIds: number[] }> {
+  return apagarParcelasPorEscopo(displayId, 'todas', requestId);
 }
 
 export async function desfazerUltimaTransacao(requestId: string): Promise<{ displayIds: number[] } | null> {
@@ -814,3 +891,168 @@ export async function registrarEntrada(
     };
   });
 }
+
+export interface GraficosDashboardData {
+  distribuicaoCategorias: Array<{
+    categoria: string;
+    total: number;
+    percentual: number;
+    cor: string;
+  }>;
+  totalCategorias: number;
+  rotuloMesAtual: string;
+  evolucao: {
+    totalMesAtual: number;
+    variacaoPercentual: number;
+    seisMeses: Array<{ label: string; total: number; mesAno: string }>;
+    trintaDias: Array<{ label: string; total: number; data: string }>;
+    seteDias: Array<{ label: string; total: number; data: string }>;
+  };
+}
+
+export async function obterDadosGraficosDashboard(requestId: string): Promise<GraficosDashboardData> {
+  return withTiming('obter dados graficos dashboard', { requestId }, async () => {
+    const supabase = getSupabaseClient();
+    const agora = new Date();
+
+    const mesesNomes = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const rotuloMesAtual = new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(agora);
+
+    // 1. Categorias do mês atual
+    const primeiroDiaMesAtual = new Date(Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth(), 1)).toISOString();
+    const primeiroDiaProxMes = new Date(Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth() + 1, 1)).toISOString();
+
+    const { data: transacoesMes, error: errMes } = await supabase
+      .from('transactions')
+      .select('total_amount, entry_type, occurred_at, categories(name)')
+      .gte('occurred_at', primeiroDiaMesAtual)
+      .lt('occurred_at', primeiroDiaProxMes);
+
+    if (errMes) throw new Error(`Erro ao buscar transações do mês: ${errMes.message}`);
+
+    const totaisPorCat = new Map<string, number>();
+    let totalGeralCategorias = 0;
+
+    for (const t of transacoesMes ?? []) {
+      if ((t as any).entry_type === 'income') continue;
+      const valor = Number((t as any).total_amount) || 0;
+      const nome = (t as any).categories?.name || 'Outros';
+      totaisPorCat.set(nome, (totaisPorCat.get(nome) ?? 0) + valor);
+      totalGeralCategorias += valor;
+    }
+
+    const coresPalette = ['#0a0a0a', '#525252', '#8c8c8c', '#a3a3a3', '#d4d4d4', '#e5e5e5'];
+    const distribuicaoCategorias = Array.from(totaisPorCat.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([categoria, total], idx) => ({
+        categoria,
+        total: Math.round(total * 100) / 100,
+        percentual: totalGeralCategorias > 0 ? Math.round((total / totalGeralCategorias) * 100) : 0,
+        cor: coresPalette[idx % coresPalette.length],
+      }));
+
+    // 2. Evolução dos últimos 6 meses
+    const seisMesesInicio = new Date(Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth() - 5, 1)).toISOString();
+    const { data: transacoes6m, error: err6m } = await supabase
+      .from('transactions')
+      .select('total_amount, occurred_at, entry_type')
+      .gte('occurred_at', seisMesesInicio)
+      .lt('occurred_at', primeiroDiaProxMes)
+      .order('occurred_at', { ascending: true });
+
+    if (err6m) throw new Error(`Erro ao buscar histórico semestral: ${err6m.message}`);
+
+    const seisMeses: Array<{ label: string; total: number; mesAno: string }> = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(agora.getFullYear(), agora.getMonth() - i, 1);
+      const mAno = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      seisMeses.push({
+        label: mesesNomes[d.getMonth()],
+        mesAno: mAno,
+        total: 0,
+      });
+    }
+
+    for (const t of transacoes6m ?? []) {
+      if ((t as any).entry_type === 'income') continue;
+      const dataStr = (t as any).occurred_at?.slice(0, 7);
+      const slot = seisMeses.find((s) => s.mesAno === dataStr);
+      if (slot) {
+        slot.total += Number((t as any).total_amount) || 0;
+      }
+    }
+
+    seisMeses.forEach((s) => {
+      s.total = Math.round(s.total * 100) / 100;
+    });
+
+    const totalMesAtual = seisMeses[seisMeses.length - 1]?.total || 0;
+    const totalMesAnterior = seisMeses[seisMeses.length - 2]?.total || 0;
+    const variacaoPercentual =
+      totalMesAnterior > 0
+        ? Math.round(((totalMesAtual - totalMesAnterior) / totalMesAnterior) * 1000) / 10
+        : 0;
+
+    // 3. 30 dias (dias do mês atual)
+    const ultimoDiaMes = new Date(agora.getFullYear(), agora.getMonth() + 1, 0).getDate();
+    const trintaDias: Array<{ label: string; total: number; data: string }> = [];
+    for (let d = 1; d <= ultimoDiaMes; d++) {
+      trintaDias.push({
+        label: String(d),
+        data: `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+        total: 0,
+      });
+    }
+
+    for (const t of transacoesMes ?? []) {
+      if ((t as any).entry_type === 'income') continue;
+      const diaNum = parseInt((t as any).occurred_at?.slice(8, 10), 10);
+      if (diaNum >= 1 && diaNum <= ultimoDiaMes) {
+        trintaDias[diaNum - 1].total += Number((t as any).total_amount) || 0;
+      }
+    }
+    trintaDias.forEach((d) => (d.total = Math.round(d.total * 100) / 100));
+
+    // 4. Últimos 7 dias
+    const seteDias: Array<{ label: string; total: number; data: string }> = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate() - i);
+      const diaSemana = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'][d.getDay()];
+      const iso = d.toISOString().slice(0, 10);
+      seteDias.push({
+        label: diaSemana,
+        data: iso,
+        total: 0,
+      });
+    }
+
+    const seteDiasInicio = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate() - 6).toISOString();
+    const { data: transacoes7d } = await supabase
+      .from('transactions')
+      .select('total_amount, occurred_at, entry_type')
+      .gte('occurred_at', seteDiasInicio);
+
+    for (const t of transacoes7d ?? []) {
+      if ((t as any).entry_type === 'income') continue;
+      const iso = (t as any).occurred_at?.slice(0, 10);
+      const slot = seteDias.find((s) => s.data === iso);
+      if (slot) {
+        slot.total += Number((t as any).total_amount) || 0;
+      }
+    }
+    seteDias.forEach((d) => (d.total = Math.round(d.total * 100) / 100));
+
+    return {
+      distribuicaoCategorias,
+      totalCategorias: Math.round(totalGeralCategorias * 100) / 100,
+      rotuloMesAtual,
+      evolucao: {
+        totalMesAtual,
+        variacaoPercentual,
+        seisMeses,
+        trintaDias,
+        seteDias,
+      },
+    };
+  });
+}

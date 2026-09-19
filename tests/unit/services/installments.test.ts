@@ -2,17 +2,17 @@ import { describe, it, expect } from 'vitest';
 import { calcularParcelas } from '../../../src/services/transactions/installments';
 
 describe('calcularParcelas', () => {
-  it('deve dividir o valor em N parcelas iguais somando exatamente o total', () => {
+  it('deve dividir o valor em N parcelas ajustando os centavos na primeira parcela', () => {
     const parcelas = calcularParcelas(100, 3, '2026-09-05T12:00:00.000Z');
 
     expect(parcelas).toHaveLength(3);
     const soma = parcelas.reduce((acc, p) => acc + p.amount, 0);
     expect(soma).toBe(100);
 
-    // 100 / 3 = 33.33 + 33.33 + 33.34
-    expect(parcelas[0].amount).toBe(33.33);
+    // 100 / 3 = 33.34 na primeira e 33.33 nas demais
+    expect(parcelas[0].amount).toBe(33.34);
     expect(parcelas[1].amount).toBe(33.33);
-    expect(parcelas[2].amount).toBe(33.34);
+    expect(parcelas[2].amount).toBe(33.33);
   });
 
   it('deve numerar parcelas de 1 até N com sufixo correspondente', () => {
@@ -36,6 +36,22 @@ describe('calcularParcelas', () => {
     expect(new Date(parcelas[0].occurredAt).getUTCMonth()).toBe(0); // jan
     expect(new Date(parcelas[1].occurredAt).getUTCMonth()).toBe(1); // fev
     expect(new Date(parcelas[2].occurredAt).getUTCMonth()).toBe(2); // mar
+  });
+
+  it('deve postergar para o mês seguinte se a compra for após o closing_day do cartão', () => {
+    // Compra no dia 20, cartão fecha dia 15: 1ª parcela vai para outubro
+    const parcelas = calcularParcelas(100, 2, '2026-09-20T10:00:00.000Z', 15);
+
+    expect(new Date(parcelas[0].occurredAt).getUTCMonth()).toBe(9); // outubro (0-indexed 9)
+    expect(new Date(parcelas[1].occurredAt).getUTCMonth()).toBe(10); // novembro (0-indexed 10)
+  });
+
+  it('deve manter o mês da compra se a compra for antes ou no dia do closing_day do cartão', () => {
+    // Compra no dia 10, cartão fecha dia 15: 1ª parcela fica em setembro
+    const parcelas = calcularParcelas(100, 2, '2026-09-10T10:00:00.000Z', 15);
+
+    expect(new Date(parcelas[0].occurredAt).getUTCMonth()).toBe(8); // setembro (0-indexed 8)
+    expect(new Date(parcelas[1].occurredAt).getUTCMonth()).toBe(9); // outubro (0-indexed 9)
   });
 
   it('deve clampar dia para o último dia do mês (31/01 em 3x -> 28/02)', () => {

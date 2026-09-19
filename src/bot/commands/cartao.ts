@@ -141,10 +141,14 @@ async function listar(chatId: number, requestId: string, bot: TelegramBot): Prom
     const etiqueta = c.is_default ? ' 🏷️ *principal*' : '';
     if (c.card_type === 'credit') {
       const periodo = calcularPeriodoFatura(c.closing_day);
-      const fecha = `${String(periodo.fechamento.getDate()).padStart(2, '0')}/${String(
+      const diaEfetivo = periodo.fechamento.getDate();
+      const fecha = `${String(diaEfetivo).padStart(2, '0')}/${String(
         periodo.fechamento.getMonth() + 1
       ).padStart(2, '0')}`;
-      return `💳 ${c.name} — fecha dia ${c.closing_day} (fatura atual: ${formatarDataCurta(
+      const descDia = diaEfetivo !== c.closing_day
+        ? `fecha dia ${c.closing_day} (neste ciclo: ${diaEfetivo})`
+        : `fecha dia ${c.closing_day}`;
+      return `💳 ${c.name} — ${descDia} (fatura atual: ${formatarDataCurta(
         periodo.inicio.toISOString()
       )} → ${fecha})${etiqueta}`;
     }
@@ -189,13 +193,14 @@ export function parseArgumentosAdd(partes: string[]): {
       return { nome: um, closing_day: 1, tipo: ALIASES_TIPO[dois.toLowerCase()] };
     }
     if (ehNumero(dois)) {
-      return { nome: um, closing_day: Math.min(28, Math.max(1, Number(dois))), tipo: 'credit' };
+      return { nome: um, closing_day: Math.min(31, Math.max(1, Number(dois))), tipo: 'credit' };
     }
     throw new Error(
       `⚠️ Não entendi "${dois}". Use dia (número) ou tipo (credito|vr|va).\n\n` +
-      `Para o segundo parâmetro, informe o *dia de fechamento* (1 a 28) ou o *tipo* (\`credito\`, \`vr\` ou \`va\`).\n\n` +
+      `Para o segundo parâmetro, informe o *dia de fechamento* (1 a 31) ou o *tipo* (\`credito\`, \`vr\` ou \`va\`).\n\n` +
       `📌 Exemplos:\n` +
       `• Ex: /cartao add ${um} 1 credito\n` +
+      `• /cartao add ${um} 30 credito\n` +
       `• /cartao add ${um} 1 vr`
     );
   }
@@ -208,7 +213,7 @@ export function parseArgumentosAdd(partes: string[]): {
   if (ehTipo(ultimo) && ehNumero(penultimo)) {
     return {
       nome,
-      closing_day: Math.min(28, Math.max(1, Number(penultimo))),
+      closing_day: Math.min(31, Math.max(1, Number(penultimo))),
       tipo: ALIASES_TIPO[ultimo.toLowerCase()],
     };
   }

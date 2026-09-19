@@ -16,6 +16,24 @@ export interface Cartao {
   card_type: CardType;
   /** 8.2 — Cartão principal do seu tipo (usado pela inferência de pagamento). */
   is_default: boolean;
+  credit_limit?: number;
+  due_day?: number | null;
+  card_holder?: string | null;
+  last_four_digits?: string | null;
+  color_theme?: string;
+  is_virtual?: boolean;
+}
+
+export interface CartaoDetalhado extends Cartao {
+  faturaAtual: number;
+  limiteDisponivel: number;
+  percentualUtilizado: number;
+  periodo: {
+    inicio: string;
+    fim: string;
+    fechamento: string;
+  };
+  itensFatura: ItemFaturaCartao[];
 }
 
 export interface PeriodoFatura {
@@ -27,29 +45,48 @@ export interface PeriodoFatura {
 }
 
 /**
- * Função pura: calcula o período da fatura atual de um cartão.
- * - Se hoje <= closing_day: fatura começou no dia seguinte ao fechamento
- *   do mês anterior e fecha em closing_day deste mês.
- * - Se hoje > closing_day: fatura começou no dia seguinte ao fechamento
- *   deste mês e fecha em closing_day do mês seguinte.
- * Datas JS normalizam overflow (ex: closing 31 em fev → 3/mar) automaticamente.
+ * Retorna o último dia de um determinado mês em um ano (ex: 28/29 em fev, 30 em abr, 31 em mai).
+ */
+export function obterUltimoDiaDoMes(ano: number, mes: number): number {
+  return new Date(ano, mes + 1, 0).getDate();
+}
+
+/**
+ * Função pura: calcula o período da fatura atual de um cartão com suporte
+ * dinâmico a fechamento no fim do mês (1 a 31).
+ *
+ * Se closing_day for maior que o número de dias do mês corrente (ex: dia 31 em
+ * fevereiro ou abril), o fechamento é clampado para o último dia daquele mês.
+ *
+ * - Se hoje <= diaFechamentoEfetivo: fatura fecha neste mês. O início é no dia
+ *   seguinte ao fechamento efetivo do mês anterior.
+ * - Se hoje > diaFechamentoEfetivo: fatura já fechou e o período atual fecha
+ *   no mês seguinte.
  */
 export function calcularPeriodoFatura(closingDay: number, agora = new Date()): PeriodoFatura {
   const ano = agora.getFullYear();
   const mes = agora.getMonth();
+  const diaHoje = agora.getDate();
 
-  if (agora.getDate() <= closingDay) {
-    return {
-      inicio: new Date(ano, mes - 1, closingDay + 1),
-      fim: new Date(ano, mes, closingDay + 1),
-      fechamento: new Date(ano, mes, closingDay),
-    };
+  const diaFechamentoMesAtual = Math.min(closingDay, obterUltimoDiaDoMes(ano, mes));
+
+  if (diaHoje <= diaFechamentoMesAtual) {
+    // Fatura fecha no mês atual
+    const diaFechamentoMesAnterior = Math.min(closingDay, obterUltimoDiaDoMes(ano, mes - 1));
+    const inicio = new Date(ano, mes - 1, diaFechamentoMesAnterior + 1);
+    const fechamento = new Date(ano, mes, diaFechamentoMesAtual);
+    const fim = new Date(ano, mes, diaFechamentoMesAtual + 1);
+
+    return { inicio, fim, fechamento };
   }
-  return {
-    inicio: new Date(ano, mes, closingDay + 1),
-    fim: new Date(ano, mes + 1, closingDay + 1),
-    fechamento: new Date(ano, mes + 1, closingDay),
-  };
+
+  // Fatura fecha no mês subsequente
+  const diaFechamentoMesSeguinte = Math.min(closingDay, obterUltimoDiaDoMes(ano, mes + 1));
+  const inicio = new Date(ano, mes, diaFechamentoMesAtual + 1);
+  const fechamento = new Date(ano, mes + 1, diaFechamentoMesSeguinte);
+  const fim = new Date(ano, mes + 1, diaFechamentoMesSeguinte + 1);
+
+  return { inicio, fim, fechamento };
 }
 
 /** Lista os cartões cadastrados (principal de cada tipo primeiro). */
@@ -230,5 +267,98 @@ export async function removerCartao(nome: string, requestId: string): Promise<st
     if (!data) return null;
     log('info', 'Cartão removido', { requestId, nome });
     return (data as any).name as string;
+  });
+}
+
+export interface NovoCartaoDTO {
+  name: string;
+  closing_day: number;
+  due_day?: number;
+  credit_limit?: number;
+  card_type?: CardType;
+  card_holder?: string;
+  last_four_digits?: string;
+  color_theme?: string;
+  is_virtual?: boolean;
+}
+
+/** Cria um cartão com todos os detalhes e configurações visuais. */
+export async function cadastrarNovoCartao(
+  dto: NovoCartaoDTO,
+  requestId: string
+): Promise<Cartao> {
+  return withTiming('cadastrar novo cartão', { requestId, dto }, async () => {
+    const supabase = getSupabaseClient();
+    const payload = {
+      name: dto.name.trim(),
+      closing_day: dto.closing_day,
+      due_day: dto.due_day || null,
+      credit_limit: dto.credit_limit || 0,
+      card_type: dto.card_type || 'credit',
+      card_holder: dto.card_holder?.trim() || null,
+      last_four_digits: dto.last_four_digits?.trim() || null,
+      color_theme: dto.color_theme || 'titanium',
+      is_virtual: Boolean(dto.is_virtual),
+    };
+
+    const { data, error } = await supabase
+      .from('cards')
+      .upsert(payload, { onConflict: 'name' })
+      .select('id, name, closing_day, card_type, is_default, credit_limit, due_day, card_holder, last_four_digits, color_theme, is_virtual')
+      .single();
+
+    if (error) throw new Error(`Erro ao cadastrar cartão: ${error.message}`);
+    const cartao = data as unknown as Cartao;
+
+    if (!cartao.is_default) {
+      const principal = await obterCartaoPrincipal(cartao.card_type, requestId);
+      if (!principal) {
+        await supabase.from('cards').update({ is_default: true }).eq('id', cartao.id);
+        cartao.is_default = true;
+      }
+    }
+
+    return cartao;
+  });
+}
+
+/**
+ * Obtém todos os cartões cadastrados já calculando a fatura do período atual,
+ * limite restante e lançamentos da fatura.
+ */
+export async function obterCartoesDetalhados(requestId: string): Promise<CartaoDetalhado[]> {
+  return withTiming('obter cartões detalhados', { requestId }, async () => {
+    const cartoes = await listarCartoes(requestId);
+    if (cartoes.length === 0) return [];
+
+    const hoje = new Date();
+    const resultado: CartaoDetalhado[] = [];
+
+    for (let i = 0; i < cartoes.length; i++) {
+      const card = cartoes[i];
+      const periodo = calcularPeriodoFatura(card.closing_day, hoje);
+      const isDefault = i === 0 || card.is_default;
+      const itens = await getFaturaDoPeriodo(card.id, periodo, isDefault, requestId);
+
+      const totalFatura = itens.reduce((acc, item) => acc + Number(item.total_amount || 0), 0);
+      const limite = Number(card.credit_limit || 0);
+      const disponivel = Math.max(0, limite - totalFatura);
+      const percentual = limite > 0 ? Math.min(100, (totalFatura / limite) * 100) : 0;
+
+      resultado.push({
+        ...card,
+        faturaAtual: totalFatura,
+        limiteDisponivel: disponivel,
+        percentualUtilizado: Number(percentual.toFixed(1)),
+        periodo: {
+          inicio: periodo.inicio.toISOString(),
+          fim: periodo.fim.toISOString(),
+          fechamento: periodo.fechamento.toISOString(),
+        },
+        itensFatura: itens.slice(-15).reverse(),
+      });
+    }
+
+    return resultado;
   });
 }

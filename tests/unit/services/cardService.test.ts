@@ -78,6 +78,36 @@ describe('calcularPeriodoFatura (função pura)', () => {
     expect(periodo.fechamento.getDate()).toBe(1);
     expect(periodo.fechamento.getMonth()).toBe(9);
   });
+
+  it('fechamento dia 31 em mês de 31 dias (janeiro): fecha no dia 31 e novo ciclo inicia no dia 1', () => {
+    // Hoje: 15/01/2026, fechamento dia 31
+    const periodo = calcularPeriodoFatura(31, new Date(2026, 0, 15));
+    expect(periodo.fechamento.getDate()).toBe(31);
+    expect(periodo.fechamento.getMonth()).toBe(0); // janeiro
+    expect(periodo.inicio.getDate()).toBe(1); // 31 de dez + 1 = 1 de jan
+    expect(periodo.inicio.getMonth()).toBe(0);
+    expect(periodo.fim.getDate()).toBe(1); // 1 de fev
+    expect(periodo.fim.getMonth()).toBe(1);
+  });
+
+  it('fechamento dia 31 em mês curto (fevereiro): clampa para 28 e fecha no último dia', () => {
+    // 2026 não é bissexto: fevereiro tem 28 dias
+    // Hoje: 10/02/2026, fechamento dia 31
+    const periodo = calcularPeriodoFatura(31, new Date(2026, 1, 10));
+    expect(periodo.fechamento.getDate()).toBe(28);
+    expect(periodo.fechamento.getMonth()).toBe(1); // fevereiro
+    expect(periodo.inicio.getDate()).toBe(1); // 31 de jan + 1 = 1 de fev
+    expect(periodo.inicio.getMonth()).toBe(1);
+  });
+
+  it('fechamento dia 31 em mês de 30 dias (abril): clampa para 30', () => {
+    // Hoje: 15/04/2026, fechamento dia 31
+    const periodo = calcularPeriodoFatura(31, new Date(2026, 3, 15));
+    expect(periodo.fechamento.getDate()).toBe(30);
+    expect(periodo.fechamento.getMonth()).toBe(3); // abril
+    expect(periodo.inicio.getDate()).toBe(1); // 31 de mar + 1 = 1 de abr
+    expect(periodo.inicio.getMonth()).toBe(3);
+  });
 });
 
 describe('listarCartoes / definirCartao / removerCartao', () => {

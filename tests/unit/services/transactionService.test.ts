@@ -13,6 +13,8 @@ import {
   registrarTransacao,
   getGastosDiariosDoMes,
   consultarGastosGranulares,
+  apagarParcelasPorEscopo,
+  anteciparParcelas,
 } from '../../../src/services/transactions/transactionService';
 import { resolveThirdPartyId } from '../../../src/services/people/peopleService';
 import type { ParsedTransaction } from '../../../src/types/transaction';
@@ -26,8 +28,10 @@ function builderResolvendo(data: unknown, error: unknown = null, singleData: unk
     update: vi.fn().mockReturnThis(),
     delete: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
     gte: vi.fn().mockReturnThis(),
     lt: vi.fn().mockReturnThis(),
+    gt: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
     maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })),
@@ -161,6 +165,9 @@ describe('getGastosDiariosDoMes — agrupamento em UTC (Fase 7.1)', () => {
 
     const porDia = await getGastosDiariosDoMes('req-1');
     expect(porDia).toHaveLength(28);
+  });
+});
+
 describe('consultarGastosGranulares — Fase 8.4 (consulta granular)', () => {
   it('filtra por categoryId e mês: devolve total exato + detalhe, e aplica os filtros na query', async () => {
     const agg = builderResolvendo([{ total_amount: 50 }, { total_amount: 25 }]);
@@ -213,5 +220,65 @@ describe('consultarGastosGranulares — Fase 8.4 (consulta granular)', () => {
     expect(mockFrom).not.toHaveBeenCalled();
   });
 });
+
+describe('apagarParcelasPorEscopo', () => {
+  it('apaga apenas esta parcela quando escopo é apenas_esta', async () => {
+    const builderSelect = builderResolvendo(null, null, null);
+    builderSelect.maybeSingle = vi.fn().mockResolvedValue({
+      data: { display_id: 10, installment_group_id: 'grp-1', installment_number: 2 },
+      error: null,
+    });
+    const builderDelete = builderResolvendo(null);
+
+    mockFrom.mockImplementationOnce(() => builderSelect).mockImplementationOnce(() => builderDelete);
+
+    const res = await apagarParcelasPorEscopo(10, 'apenas_esta', 'req-del-1');
+    expect(res.displayIds).toEqual([10]);
+    expect(builderDelete.delete).toHaveBeenCalled();
+    expect(builderDelete.eq).toHaveBeenCalledWith('display_id', 10);
+  });
+
+  it('apaga esta e seguintes quando escopo é esta_e_seguintes', async () => {
+    const builderSelect = builderResolvendo(null, null, null);
+    builderSelect.maybeSingle = vi.fn().mockResolvedValue({
+      data: { display_id: 10, installment_group_id: 'grp-1', installment_number: 2 },
+      error: null,
+    });
+    const builderDelete = builderResolvendo([{ display_id: 10 }, { display_id: 11 }]);
+
+    mockFrom.mockImplementationOnce(() => builderSelect).mockImplementationOnce(() => builderDelete);
+
+    const res = await apagarParcelasPorEscopo(10, 'esta_e_seguintes', 'req-del-2');
+    expect(res.displayIds).toEqual([10, 11]);
+    expect(builderDelete.eq).toHaveBeenCalledWith('installment_group_id', 'grp-1');
+    expect(builderDelete.gte).toHaveBeenCalledWith('installment_number', 2);
+  });
+
+  it('apaga todas as parcelas do grupo quando escopo é todas', async () => {
+    const builderSelect = builderResolvendo(null, null, null);
+    builderSelect.maybeSingle = vi.fn().mockResolvedValue({
+      data: { display_id: 9, installment_group_id: 'grp-1', installment_number: 1 },
+      error: null,
+    });
+    const builderDelete = builderResolvendo([{ display_id: 9 }, { display_id: 10 }, { display_id: 11 }]);
+
+    mockFrom.mockImplementationOnce(() => builderSelect).mockImplementationOnce(() => builderDelete);
+
+    const res = await apagarParcelasPorEscopo(9, 'todas', 'req-del-3');
+    expect(res.displayIds).toEqual([9, 10, 11]);
+    expect(builderDelete.eq).toHaveBeenCalledWith('installment_group_id', 'grp-1');
+  });
+});
+
+describe('anteciparParcelas', () => {
+  it('atualiza occurred_at das parcelas selecionadas', async () => {
+    const builder = builderResolvendo([{ display_id: 10 }, { display_id: 11 }]);
+    mockFrom.mockImplementationOnce(() => builder);
+
+    const res = await anteciparParcelas('grp-1', [2, 3], '2026-09-01T00:00:00.000Z', 'req-ant-1');
+    expect(res.displayIds).toEqual([10, 11]);
+    expect(builder.update).toHaveBeenCalledWith({ occurred_at: '2026-09-01T00:00:00.000Z' });
+    expect(builder.eq).toHaveBeenCalledWith('installment_group_id', 'grp-1');
+    expect(builder.in).toHaveBeenCalledWith('installment_number', [2, 3]);
   });
 });

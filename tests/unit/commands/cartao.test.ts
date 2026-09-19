@@ -41,7 +41,7 @@ describe('cartao — parseArgumentosAdd', () => {
   it('reconhece nome + dia', () => {
     expect(parseArgumentosAdd(['Santander', '30'])).toEqual({
       nome: 'Santander',
-      closing_day: 28, // clamp de segurança
+      closing_day: 30,
       tipo: 'credit',
     });
   });
