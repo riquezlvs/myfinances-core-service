@@ -270,19 +270,35 @@ export async function getFaturaDoPeriodo(
   );
 }
 
-/** Remove um cartão pelo nome. Retorna o nome removido ou null. */
-export async function removerCartao(nome: string, requestId: string): Promise<string | null> {
-  return withTiming('remover cartão', { requestId, nome }, async () => {
-    const { data, error } = await getSupabaseClient()
+/** Remove um cartão por ID ou pelo nome. Retorna o nome removido ou null. */
+export async function removerCartao(idOuNome: string, requestId: string): Promise<string | null> {
+  return withTiming('remover cartão', { requestId, idOuNome }, async () => {
+    const supabase = getSupabaseClient();
+    
+    // Tenta primeiro por ID
+    let { data, error } = await supabase
       .from('cards')
       .delete()
-      .eq('name', nome)
+      .eq('id', idOuNome)
       .select('name')
       .maybeSingle();
 
+    // Se não encontrou por ID ou erro de UUID, tenta por name
+    if (!data) {
+      const resNome = await supabase
+        .from('cards')
+        .delete()
+        .eq('name', idOuNome)
+        .select('name')
+        .maybeSingle();
+      
+      data = resNome.data;
+      error = resNome.error;
+    }
+
     if (error) throw new Error(`Erro ao remover cartão: ${error.message}`);
     if (!data) return null;
-    log('info', 'Cartão removido', { requestId, nome });
+    log('info', 'Cartão removido', { requestId, idOuNome, nome: (data as any).name });
     return (data as any).name as string;
   });
 }

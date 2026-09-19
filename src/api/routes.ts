@@ -306,6 +306,44 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     }
   }
 
+  // Rota: POST /api/cards/remover ou DELETE /api/cards (Remover cartão)
+  if (
+    (url === '/api/cards/remover' && method === 'POST') ||
+    (url.startsWith('/api/cards') && method === 'DELETE')
+  ) {
+    try {
+      const parsedUrl = new URL(url, 'http://localhost');
+      let cardId = parsedUrl.searchParams.get('id') || parsedUrl.searchParams.get('name');
+      
+      if (!cardId && method === 'POST') {
+        const body = await parseJsonBody(req);
+        cardId = body?.id || body?.name;
+      }
+
+      if (!cardId) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'Identificador do cartão ("id" ou "name") é obrigatório.',
+        });
+        return true;
+      }
+
+      const nomeRemovido = await removerCartao(String(cardId), requestId);
+      sendJson(res, 200, {
+        sucesso: true,
+        mensagem: nomeRemovido ? `Cartão "${nomeRemovido}" removido com sucesso!` : 'Cartão removido com sucesso!',
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao remover cartão', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao remover cartão.',
+      });
+      return true;
+    }
+  }
+
   // Rota: GET /api/investimentos (Consolidação de carteira, alocação e evolução)
   if (url === '/api/investimentos' && method === 'GET') {
     try {
