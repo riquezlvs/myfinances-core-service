@@ -92,13 +92,29 @@ export function calcularPeriodoFatura(closingDay: number, agora = new Date()): P
 /** Lista os cartões cadastrados (principal de cada tipo primeiro). */
 export async function listarCartoes(requestId: string): Promise<Cartao[]> {
   return withTiming('listar cartões', { requestId }, async () => {
-    const { data, error } = await getSupabaseClient()
+    const supabase = getSupabaseClient();
+    
+    // Tenta selecionar todas as colunas estendidas do cartão
+    const { data, error } = await supabase
       .from('cards')
-      .select('id, name, closing_day, card_type, is_default')
+      .select('id, name, closing_day, card_type, is_default, credit_limit, due_day, card_holder, last_four_digits, color_theme, is_virtual')
       .order('is_default', { ascending: false })
       .order('closing_day', { ascending: true });
 
-    if (error) throw new Error(`Erro ao listar cartões: ${error.message}`);
+    if (error) {
+      // Se der erro de coluna inexistente no banco (schema antigo), faz fallback para colunas base
+      if (error.message?.includes('column') || error.message?.includes('schema cache')) {
+        const resBase = await supabase
+          .from('cards')
+          .select('id, name, closing_day, card_type, is_default')
+          .order('is_default', { ascending: false })
+          .order('closing_day', { ascending: true });
+
+        if (resBase.error) throw new Error(`Erro ao listar cartões: ${resBase.error.message}`);
+        return (resBase.data ?? []) as unknown as Cartao[];
+      }
+      throw new Error(`Erro ao listar cartões: ${error.message}`);
+    }
     return (data ?? []) as unknown as Cartao[];
   });
 }
@@ -106,6 +122,7 @@ export async function listarCartoes(requestId: string): Promise<Cartao[]> {
 /** Rótulo legível do tipo de cartão (8.2). */
 export const LABEL_CARD_TYPE: Record<CardType, string> = {
   credit: 'Crédito',
+  debit: 'Débito',
   meal_voucher: 'Vale-refeição',
   food_voucher: 'Vale-alimentação',
 };

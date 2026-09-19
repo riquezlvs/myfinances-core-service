@@ -81,3 +81,128 @@ export async function listarOuCriarPessoas(
     return mapa;
   });
 }
+
+export interface PessoaComSaldo {
+  id: string;
+  name: string;
+  created_at?: string;
+  initials: string;
+  saldoDevedor: number;
+  totalOriginal: number;
+  totalPago: number;
+  status: 'Em aberto' | 'Zerado';
+  itensInclusos?: Array<{
+    displayId?: number;
+    description: string;
+    amount: number;
+    occurredAt?: string;
+  }>;
+}
+
+export async function listarPessoasComSaldos(
+  busca?: string,
+  requestId?: string
+): Promise<PessoaComSaldo[]> {
+  const reqId = requestId || 'req-people-list';
+  return withTiming('listar pessoas com saldos', { requestId: reqId, busca }, async () => {
+    const supabase = getSupabaseClient();
+
+    // 1. Busca todas as pessoas cadastradas
+    let query = supabase.from('people').select('id, name, created_at').order('name', { ascending: true });
+    if (busca && busca.trim()) {
+      query = query.ilike('name', `%${busca.trim()}%`);
+    }
+    const { data: pessoas, error: erroPessoas } = await query;
+    if (erroPessoas) throw new Error(`Erro ao buscar pessoas: ${erroPessoas.message}`);
+
+    if (!pessoas || pessoas.length === 0) {
+      return [];
+    }
+
+    // 2. Busca todas as transações com dívida/split
+    const { data: transacoesDividas, error: erroDividas } = await supabase
+      .from('transactions')
+      .select('display_id, description, third_party_id, third_party_share_amount, occurred_at')
+      .gt('third_party_share_amount', 0);
+
+    if (erroDividas) throw new Error(`Erro ao buscar dívidas: ${erroDividas.message}`);
+
+    // 3. Busca todos os pagamentos de dívidas
+    const { data: pagamentos, error: erroPagamentos } = await supabase
+      .from('debt_payments')
+      .select('person_id, amount');
+
+    if (erroPagamentos) throw new Error(`Erro ao buscar pagamentos de dívidas: ${erroPagamentos.message}`);
+
+    // Agrupa pagamentos por person_id
+    const pagamentosPorId = new Map<string, number>();
+    for (const p of pagamentos ?? []) {
+      const atual = pagamentosPorId.get(p.person_id) ?? 0;
+      pagamentosPorId.set(p.person_id, atual + Number(p.amount));
+    }
+
+    // Agrupa transações por third_party_id
+    const dividasPorId = new Map<string, any[]>();
+    for (const d of transacoesDividas ?? []) {
+      if (!d.third_party_id) continue;
+      const lista = dividasPorId.get(d.third_party_id) ?? [];
+      lista.push(d);
+      dividasPorId.set(d.third_party_id, lista);
+    }
+
+    // Monta resposta com cálculo de saldo para cada pessoa
+    return pessoas.map((p: any) => {
+      const dividasDaPessoa = dividasPorId.get(p.id) ?? [];
+      const totalOriginal = dividasDaPessoa.reduce(
+        (acc: number, curr: any) => acc + Number(curr.third_party_share_amount || 0),
+        0
+      );
+      const totalPago = pagamentosPorId.get(p.id) ?? 0;
+      const saldoDevedor = Math.max(0, Math.round((totalOriginal - totalPago) * 100) / 100);
+
+      // Iniciais para o avatar
+      const nomes = (p.name || '').trim().split(/\s+/);
+      let initials = 'P';
+      if (nomes.length === 1 && nomes[0]) {
+        initials = nomes[0].slice(0, 2).toUpperCase();
+      } else if (nomes.length > 1) {
+        initials = (nomes[0][0] + nomes[nomes.length - 1][0]).toUpperCase();
+      }
+
+      const itensInclusos = dividasDaPessoa.map((d: any) => ({
+        displayId: d.display_id,
+        description: d.description,
+        amount: Number(d.third_party_share_amount || 0),
+        occurredAt: d.occurred_at,
+      }));
+
+      return {
+        id: p.id,
+        name: p.name,
+        created_at: p.created_at,
+        initials,
+        saldoDevedor,
+        totalOriginal,
+        totalPago,
+        status: saldoDevedor > 0 ? ('Em aberto' as const) : ('Zerado' as const),
+        itensInclusos,
+      };
+    });
+  });
+}
+
+export async function cadastrarNovaPessoa(
+  nome: string,
+  requestId?: string
+): Promise<{ id: string; name: string }> {
+  const reqId = requestId || 'req-create-person';
+  return withTiming('cadastrar nova pessoa', { requestId: reqId, nome }, async () => {
+    const nomeLimpo = (nome || '').trim();
+    if (!nomeLimpo) throw new Error('O nome da pessoa é obrigatório.');
+    if (nomeLimpo.length > 60) throw new Error('O nome não pode exceder 60 caracteres.');
+
+    const supabase = getSupabaseClient();
+    const id = await resolveThirdPartyId(nomeLimpo, reqId);
+    return { id, name: nomeLimpo };
+  });
+}

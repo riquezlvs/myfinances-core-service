@@ -163,6 +163,8 @@ export async function obterDadosInvestimentosDashboard(requestId: string = 'dash
         balance: Number(c.balance || 0),
         subtitle,
         monthlyVariation: '+1,02% este mês',
+        cdi_rate: c.cdi_rate ? Number(c.cdi_rate) : null,
+        start_date: c.start_date || null,
       };
     });
 
@@ -348,6 +350,55 @@ export async function ajustarSaldoInstituicao(
     mensagem: `Saldo de ${contaAtualizada.name} ajustado para R$ ${contaAtualizada.balance.toFixed(2)}.`,
     dados: contaAtualizada,
   };
+}
+
+/**
+ * Edita todas as informações de uma instituição / conta
+ */
+export async function editarInstituicaoCompleta(
+  payload: {
+    accountId: string;
+    name: string;
+    type: 'checking' | 'benefit' | 'fixed_income' | 'investment_broker';
+    balance: number;
+    cdi_rate?: number | null;
+    start_date?: string | null;
+  },
+  requestId: string = randomUUID()
+) {
+  return withTiming('editar instituicao completa', { requestId, accountId: payload.accountId }, async () => {
+    const supabase = getSupabaseClient();
+    const updatePayload: any = {
+      name: payload.name.trim(),
+      type: payload.type,
+      balance: Number(payload.balance),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (payload.cdi_rate !== undefined) {
+      updatePayload.cdi_rate = payload.cdi_rate ? Number(payload.cdi_rate) : null;
+    }
+    if (payload.start_date !== undefined) {
+      updatePayload.start_date = payload.start_date || null;
+    }
+
+    const { data, error } = await supabase
+      .from('accounts')
+      .update(updatePayload)
+      .eq('id', payload.accountId)
+      .select('*')
+      .single();
+
+    if (error) {
+      throw new Error(`Erro ao atualizar instituição: ${error.message}`);
+    }
+
+    return {
+      sucesso: true,
+      mensagem: `Instituição "${data.name}" atualizada com sucesso!`,
+      dados: data,
+    };
+  });
 }
 
 /**

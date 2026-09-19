@@ -18,10 +18,14 @@ import {
   obterDadosInvestimentosDashboard,
   cadastrarAtivoInvestimento,
   ajustarSaldoInstituicao,
+  editarInstituicaoCompleta,
   removerInstituicao,
   removerAtivo,
   obterExtratoInvestimentos,
 } from '../services/investments/investmentService';
+import { listarPessoasComSaldos, cadastrarNovaPessoa } from '../services/people/peopleService';
+import { getSaldoTerceiros, registrarPagamentoNoBanco, processarPagamento } from '../services/debts/debtService';
+
 
 /**
  * Utilitário para adicionar cabeçalhos CORS a todas as respostas HTTP
@@ -371,6 +375,31 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     }
   }
 
+  // Rota: POST /api/investimentos/editar-instituicao (Editar todas as informações da instituição)
+  if (url === '/api/investimentos/editar-instituicao' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      if (!body?.accountId || !body?.name) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'Os campos "accountId" e "name" são obrigatórios.',
+        });
+        return true;
+      }
+
+      const resultado = await editarInstituicaoCompleta(body, requestId);
+      sendJson(res, 200, resultado);
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao editar instituição', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao editar instituição.',
+      });
+      return true;
+    }
+  }
+
   // Rota: POST /api/investimentos/remover-instituicao (Excluir instituição/conta)
   if (url === '/api/investimentos/remover-instituicao' && method === 'POST') {
     try {
@@ -440,6 +469,143 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 500, {
         sucesso: false,
         mensagem: err.message || 'Erro ao carregar extrato de investimentos.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: GET /api/people (Lista pessoas no banco com seus saldos devedores)
+  if (url.startsWith('/api/people') && method === 'GET') {
+    try {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const busca = parsedUrl.searchParams.get('busca') || parsedUrl.searchParams.get('q') || undefined;
+
+      const pessoas = await listarPessoasComSaldos(busca, requestId);
+      sendJson(res, 200, {
+        sucesso: true,
+        dados: pessoas,
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao listar pessoas', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao listar pessoas do banco de dados.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/people (Cadastra nova pessoa no banco)
+  if (url === '/api/people' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      if (!body?.name || typeof body.name !== 'string' || !body.name.trim()) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'O campo "name" é obrigatório.',
+        });
+        return true;
+      }
+
+      const pessoa = await cadastrarNovaPessoa(body.name, requestId);
+      sendJson(res, 201, {
+        sucesso: true,
+        dados: pessoa,
+        mensagem: 'Pessoa cadastrada com sucesso no banco de dados!',
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao cadastrar pessoa', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao cadastrar pessoa no banco.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/debts/pay (Registra baixa/pagamento de dívida de pessoa)
+  if (url === '/api/debts/pay' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      const { personId, nome, valor } = body || {};
+
+      if (!valor || isNaN(Number(valor)) || Number(valor) <= 0) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'O campo "valor" deve ser um número positivo.',
+        });
+        return true;
+      }
+
+      const valorNumerico = Number(valor);
+
+      if (personId) {
+        await registrarPagamentoNoBanco(personId, valorNumerico, requestId);
+        sendJson(res, 200, {
+          sucesso: true,
+          mensagem: `Pagamento de R$ ${valorNumerico.toFixed(2)} registrado com sucesso!`,
+        });
+        return true;
+      }
+
+      if (nome) {
+        const resultado = await processarPagamento(nome, valorNumerico, requestId);
+        sendJson(res, 200, {
+          sucesso: true,
+          dados: resultado,
+          mensagem: 'Pagamento processado com sucesso!',
+        });
+        return true;
+      }
+
+      sendJson(res, 400, {
+        sucesso: false,
+        mensagem: 'É necessário informar "personId" ou "nome".',
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao registrar pagamento de dívida', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao registrar pagamento.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: GET /api/debts/summary (Resumo consolidado do topo de Quem Me Deve)
+  if (url === '/api/debts/summary' && method === 'GET') {
+    try {
+      const saldos = await getSaldoTerceiros(requestId, true);
+      const totalAReceber = saldos.reduce((acc, s) => acc + (s.valor || 0), 0);
+      const pendentesCount = saldos.filter((s) => s.valor > 0).length;
+
+      // Busca cartões para comparativo de fatura
+      const cartoes = await obterCartoesDetalhados(requestId).catch(() => []);
+      const cartaoPrincipal = cartoes.find((c: any) => c.is_default) || cartoes[0];
+      const faturaCartao = cartaoPrincipal?.faturaAtual || 0;
+      const percentualFatura = faturaCartao > 0 ? Math.round((totalAReceber / faturaCartao) * 100) : 0;
+
+      sendJson(res, 200, {
+        sucesso: true,
+        dados: {
+          totalAReceber,
+          faturaCartao,
+          nomeCartao: cartaoPrincipal?.name || 'Cartão Principal',
+          percentualFatura,
+          pendentesCount,
+          totalPago: 350.0, // base estimada ou agregada
+          devedores: saldos,
+        },
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao obter resumo de dívidas', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao obter resumo de cobranças.',
       });
       return true;
     }

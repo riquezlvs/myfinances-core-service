@@ -29,6 +29,8 @@ import { RODAPE_UX } from '../../config/constants';
 const ALIASES_TIPO: Record<string, CardType> = {
   credito: 'credit',
   credit: 'credit',
+  debito: 'debit',
+  debit: 'debit',
   vr: 'meal_voucher',
   refeicao: 'meal_voucher',
   va: 'food_voucher',
@@ -40,21 +42,21 @@ function parseTipo(token: string | undefined): CardType {
   const tipo = ALIASES_TIPO[token.toLowerCase()];
   if (!tipo) {
     throw new Error(
-      `Tipo "${token}" não reconhecido. Use: credito (credit), vr (refeicao) ou va (alimentacao).\n\nEx: /cartao add Santander 1 credito`
+      `Tipo "${token}" não reconhecido. Use: credito (credit), debito (debit), vr (refeicao) ou va (alimentacao).\n\nEx: /cartao add Santander 1 debito`
     );
   }
   return tipo;
 }
 
 function emojiTipo(tipo: CardType): string {
-  return tipo === 'credit' ? '💳' : tipo === 'meal_voucher' ? '🍽️' : '🛒';
+  return tipo === 'credit' ? '💳' : tipo === 'debit' ? '🏦' : tipo === 'meal_voucher' ? '🍽️' : '🛒';
 }
 
 /** Comandos do /cartão — usada na ajuda e nas mensagens de fallback. */
 const COMANDOS_CARTAO = [
   '📋 *Comandos do /cartão:*',
   '/cartao — listar cartões e vales',
-  '/cartao add <nome> [dia] [credito|vr|va] — adicionar/atualizar',
+  '/cartao add <nome> [dia] [credito|debito|vr|va] — adicionar/atualizar',
   '/cartao principal <nome> — definir como principal',
   '/cartao fatura <nome> — ver fatura do período',
   '/cartao remover <nome> — remover cartão/vale',

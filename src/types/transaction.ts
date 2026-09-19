@@ -4,7 +4,7 @@ export type PaymentMethod = 'pix' | 'credit_card' | 'debit_card' | 'meal_voucher
  * 8.2 — Tipo do cartão cadastrado. Crédito fecha fatura; vales (refeição/
  * alimentação) são saldo pré-pago por categoria de uso.
  */
-export type CardType = 'credit' | 'meal_voucher' | 'food_voucher';
+export type CardType = 'credit' | 'debit' | 'meal_voucher' | 'food_voucher';
 
 /**
  * Intenções reconhecidas pelo bot.

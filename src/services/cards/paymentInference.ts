@@ -41,7 +41,9 @@ export interface PagamentoResolvido {
 
 /** Mapeia o tipo do cartão para o payment_method equivalente na transação. */
 export function cardTypeParaPaymentMethod(tipo: CardType): PaymentMethod {
-  return tipo === 'credit' ? 'credit_card' : tipo;
+  if (tipo === 'credit') return 'credit_card';
+  if (tipo === 'debit') return 'debit_card';
+  return tipo;
 }
 
 /** Função pura: a categoria é compatível com vale-refeição/alimentação? */
