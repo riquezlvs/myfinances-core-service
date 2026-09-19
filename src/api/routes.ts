@@ -18,6 +18,8 @@ import {
   obterDadosInvestimentosDashboard,
   cadastrarAtivoInvestimento,
   ajustarSaldoInstituicao,
+  removerInstituicao,
+  removerAtivo,
   obterExtratoInvestimentos,
 } from '../services/investments/investmentService';
 
@@ -364,6 +366,56 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 500, {
         sucesso: false,
         mensagem: err.message || 'Erro ao ajustar saldo.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/investimentos/remover-instituicao (Excluir instituição/conta)
+  if (url === '/api/investimentos/remover-instituicao' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      if (!body?.accountId) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'O campo "accountId" é obrigatório.',
+        });
+        return true;
+      }
+
+      const resultado = await removerInstituicao(body.accountId, requestId);
+      sendJson(res, 200, resultado);
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao remover instituição', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao remover instituição.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/investimentos/remover-ativo (Excluir ativo)
+  if (url === '/api/investimentos/remover-ativo' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      if (!body?.assetId) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'O campo "assetId" é obrigatório.',
+        });
+        return true;
+      }
+
+      const resultado = await removerAtivo(body.assetId, requestId);
+      sendJson(res, 200, resultado);
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao remover ativo', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao remover ativo.',
       });
       return true;
     }

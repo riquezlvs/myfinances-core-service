@@ -290,7 +290,7 @@ export async function cadastrarNovoCartao(
 ): Promise<Cartao> {
   return withTiming('cadastrar ou atualizar cartão', { requestId, dto }, async () => {
     const supabase = getSupabaseClient();
-    const payload: any = {
+    const payloadCompleto: any = {
       name: dto.name.trim(),
       closing_day: dto.closing_day,
       due_day: dto.due_day || null,
@@ -303,16 +303,64 @@ export async function cadastrarNovoCartao(
     };
 
     if (dto.id && !dto.id.startsWith('temp-') && !dto.id.includes('-default')) {
-      payload.id = dto.id;
+      payloadCompleto.id = dto.id;
     }
 
-    const { data, error } = await supabase
-      .from('cards')
-      .upsert(payload, { onConflict: dto.id && !dto.id.startsWith('temp-') ? 'id' : 'name' })
-      .select('id, name, closing_day, card_type, is_default, credit_limit, due_day, card_holder, last_four_digits, color_theme, is_virtual')
-      .single();
+    const onConflictTarget = dto.id && !dto.id.startsWith('temp-') && !dto.id.includes('-default') ? 'id' : 'name';
 
-    if (error) throw new Error(`Erro ao salvar cartão: ${error.message}`);
+    // Tentativa 1: tentar salvar com todas as colunas novas
+    let data: any = null;
+    let error: any = null;
+
+    const resCompleto = await supabase
+      .from('cards')
+      .upsert(payloadCompleto, { onConflict: onConflictTarget })
+      .select('id, name, closing_day, card_type, is_default, credit_limit, due_day, card_holder, last_four_digits, color_theme, is_virtual')
+      .maybeSingle();
+
+    data = resCompleto.data;
+    error = resCompleto.error;
+
+    // Se o banco remoto ainda não tiver as colunas novas (schema cache), faz fallback seguro para a tabela base
+    if (error && (error.message?.includes('card_holder') || error.message?.includes('column') || error.message?.includes('schema cache'))) {
+      log('warn', 'Colunas adicionais de cards não detectadas no Supabase. Usando colunas base.', {
+        requestId,
+        erro: error.message,
+      });
+
+      const payloadBase: any = {
+        name: dto.name.trim(),
+        closing_day: dto.closing_day,
+        card_type: dto.card_type || 'credit',
+      };
+      if (dto.id && !dto.id.startsWith('temp-') && !dto.id.includes('-default')) {
+        payloadBase.id = dto.id;
+      }
+
+      const resBase = await supabase
+        .from('cards')
+        .upsert(payloadBase, { onConflict: onConflictTarget })
+        .select('id, name, closing_day, card_type, is_default')
+        .single();
+
+      if (resBase.error) {
+        throw new Error(`Erro ao salvar cartão: ${resBase.error.message}`);
+      }
+
+      data = {
+        ...resBase.data,
+        credit_limit: dto.credit_limit || 0,
+        due_day: dto.due_day || 10,
+        card_holder: dto.card_holder || null,
+        last_four_digits: dto.last_four_digits || null,
+        color_theme: dto.color_theme || 'titanium',
+        is_virtual: Boolean(dto.is_virtual),
+      };
+      error = null;
+    } else if (error) {
+      throw new Error(`Erro ao salvar cartão: ${error.message}`);
+    }
+
     const cartao = data as unknown as Cartao;
 
     if (!cartao.is_default) {

@@ -63,56 +63,82 @@ export async function obterDadosInvestimentosDashboard(requestId: string = 'dash
       listarAtivos(undefined, requestId).catch(() => []),
     ]);
 
-    const totalNetWorth = patrimonio?.totalNetWorth || 148650.20;
-    const liquidTotal = patrimonio?.liquidAssets?.total ?? 20811.00;
-    const fixedTotal = patrimonio?.fixedIncome?.totalNet ?? 77298.10;
-    const variableTotal = patrimonio?.variableIncome?.totalMarketValue ?? 41622.05;
+    const contasAtivas = contas.filter((c) => c.is_active !== false);
 
-    // Alocação macro
-    const cryptoTotal = 8919.05;
-    const somaAtivos = (fixedTotal + variableTotal + liquidTotal + cryptoTotal) || totalNetWorth || 1;
+    // Ativos de renda fixa reais
+    const fixedTotal = patrimonio?.fixedIncome?.totalNet ??
+      contasAtivas.filter((c) => c.type === 'fixed_income').reduce((acc, c) => acc + Number(c.balance || 0), 0);
+
+    // Ativos líquidos reais (checking)
+    const liquidTotal = patrimonio?.liquidAssets?.total ??
+      contasAtivas.filter((c) => c.type === 'checking').reduce((acc, c) => acc + Number(c.balance || 0), 0);
+
+    // Ativos de cripto reais
+    const criptoAtivos = ativos.filter((a) => a.asset_type === 'crypto');
+    const cryptoTotal = criptoAtivos.reduce((acc, a) => {
+      const preco = a.current_price ?? a.average_price ?? 0;
+      return acc + (Number(a.quantity) * Number(preco));
+    }, 0);
+
+    // Ativos de renda variável reais (ações, FIIs, ETFs e outros menos cripto)
+    const variaveisAtivos = ativos.filter((a) => a.asset_type !== 'crypto');
+    const variableTotal = patrimonio?.variableIncome?.totalMarketValue ??
+      variaveisAtivos.reduce((acc, a) => {
+        const preco = a.current_price ?? a.average_price ?? 0;
+        return acc + (Number(a.quantity) * Number(preco));
+      }, 0);
+
+    const somaAtivos = fixedTotal + variableTotal + liquidTotal + cryptoTotal;
+    const totalNetWorth = patrimonio?.totalNetWorth ?? (somaAtivos > 0 ? somaAtivos : 0);
+
+    const calcPct = (val: number) => (somaAtivos > 0 ? Number(((val / somaAtivos) * 100).toFixed(1)) : 0);
+
+    const rfPct = calcPct(fixedTotal);
+    const rvPct = calcPct(variableTotal);
+    const resPct = calcPct(liquidTotal);
+    const crPct = calcPct(cryptoTotal);
 
     const alocacao = [
       {
         id: 'rf',
         name: 'Renda Fixa & Tesouro',
         subtitle: 'CDI, Selic, IPCA+',
-        value: fixedTotal > 0 ? fixedTotal : 77298.10,
-        percentage: Number(((fixedTotal / somaAtivos) * 100).toFixed(1)) || 52.0,
+        value: Number(fixedTotal.toFixed(2)),
+        percentage: rfPct,
         color: '#0a0a0a',
-        badge: '52% RF',
+        badge: `${rfPct}% RF`,
       },
       {
         id: 'rv',
         name: 'Renda Variável & FIIs',
         subtitle: 'Ações BR, Fundos Imobiliários',
-        value: variableTotal > 0 ? variableTotal : 41622.05,
-        percentage: Number(((variableTotal / somaAtivos) * 100).toFixed(1)) || 28.0,
+        value: Number(variableTotal.toFixed(2)),
+        percentage: rvPct,
         color: '#5e5e5e',
-        badge: '28% RV',
+        badge: `${rvPct}% RV`,
       },
       {
         id: 'reserva',
         name: 'Reserva de Emergência',
         subtitle: 'Liquidez imediata diária',
-        value: liquidTotal > 0 ? liquidTotal : 20811.00,
-        percentage: Number(((liquidTotal / somaAtivos) * 100).toFixed(1)) || 14.0,
+        value: Number(liquidTotal.toFixed(2)),
+        percentage: resPct,
         color: '#737373',
-        badge: '14% Emerg.',
+        badge: `${resPct}% Emerg.`,
       },
       {
         id: 'cripto',
         name: 'Cripto & Ativos Globais',
         subtitle: 'BTC, ETH, Dólar USD',
-        value: cryptoTotal,
-        percentage: Number(((cryptoTotal / somaAtivos) * 100).toFixed(1)) || 6.0,
+        value: Number(cryptoTotal.toFixed(2)),
+        percentage: crPct,
         color: '#c4c7c7',
-        badge: '6% Outros',
+        badge: `${crPct}% Cripto`,
       },
     ];
 
-    // Instituições conectadas (com fallback amigável caso não haja contas ainda cadastradas)
-    let instituicoes = contas.map((c) => {
+    // Instituições conectadas reais do usuário
+    const instituicoes = contasAtivas.map((c) => {
       let sigla = c.name.slice(0, 2).toUpperCase();
       if (c.name.toLowerCase().includes('nu')) sigla = 'NU';
       else if (c.name.toLowerCase().includes('xp')) sigla = 'XP';
@@ -120,61 +146,25 @@ export async function obterDadosInvestimentosDashboard(requestId: string = 'dash
       else if (c.name.toLowerCase().includes('binance')) sigla = 'BN';
       else if (c.name.toLowerCase().includes('inter')) sigla = 'IN';
 
+      let subtitle = 'Conta Corrente & Reserva';
+      if (c.type === 'fixed_income') {
+        subtitle = `Caixinhas CDI • ${c.cdi_rate || 115}% CDI`;
+      } else if (c.type === 'investment_broker') {
+        subtitle = 'Custódia de Ativos & FIIs';
+      } else if (c.type === 'benefit') {
+        subtitle = 'Cartão de Benefício';
+      }
+
       return {
         id: c.id,
         name: c.name,
         type: c.type,
         sigla,
-        balance: Number(c.balance),
-        subtitle: c.type === 'fixed_income'
-          ? `Caixinhas CDI • ${c.cdi_rate || 100}% CDI`
-          : c.type === 'investment_broker'
-          ? 'Custódia de Ativos & FIIs'
-          : 'Conta Corrente & Reserva',
+        balance: Number(c.balance || 0),
+        subtitle,
         monthlyVariation: '+1,02% este mês',
       };
     });
-
-    if (instituicoes.length === 0) {
-      instituicoes = [
-        {
-          id: 'inst-1',
-          name: 'Nubank / NuInvest',
-          type: 'fixed_income',
-          sigla: 'NU',
-          balance: 58420.00,
-          subtitle: 'Caixinhas CDI • Tesouro 2029',
-          monthlyVariation: '+1,02% este mês',
-        },
-        {
-          id: 'inst-2',
-          name: 'XP Investimentos',
-          type: 'investment_broker',
-          sigla: 'XP',
-          balance: 49311.15,
-          subtitle: 'FIIs (HGLG11), BBAS3, PETR4',
-          monthlyVariation: '+3,18% este mês',
-        },
-        {
-          id: 'inst-3',
-          name: 'BTG Pactual',
-          type: 'fixed_income',
-          sigla: 'BTG',
-          balance: 32000.00,
-          subtitle: 'CDB 115% CDI Liquidez Diária',
-          monthlyVariation: '+0,98% este mês',
-        },
-        {
-          id: 'inst-4',
-          name: 'Binance & On-chain',
-          type: 'investment_broker',
-          sigla: 'BN',
-          balance: 8919.05,
-          subtitle: 'Bitcoin (BTC), Ethereum (ETH)',
-          monthlyVariation: '+5,40% este mês',
-        },
-      ];
-    }
 
     // Curvas históricas para o gráfico de evolução
     const evolucaoHistorica = {
@@ -358,6 +348,44 @@ export async function ajustarSaldoInstituicao(
     mensagem: `Saldo de ${contaAtualizada.name} ajustado para R$ ${contaAtualizada.balance.toFixed(2)}.`,
     dados: contaAtualizada,
   };
+}
+
+/**
+ * Remove / exclui uma instituição ou conta
+ */
+export async function removerInstituicao(accountId: string, requestId: string = randomUUID()) {
+  return withTiming('remover instituicao', { requestId, accountId }, async () => {
+    const supabase = getSupabaseClient();
+    // Exclui ativos vinculados primeiro
+    await supabase.from('investment_assets').delete().eq('account_id', accountId);
+    // Exclui a conta
+    const { error } = await supabase.from('accounts').delete().eq('id', accountId);
+    if (error) {
+      // Se tiver restrição de FK em transactions, marca como inativa
+      await supabase.from('accounts').update({ is_active: false, updated_at: new Date().toISOString() }).eq('id', accountId);
+    }
+    return {
+      sucesso: true,
+      mensagem: 'Instituição removida com sucesso.',
+    };
+  });
+}
+
+/**
+ * Remove / exclui um ativo de investimento
+ */
+export async function removerAtivo(assetId: string, requestId: string = randomUUID()) {
+  return withTiming('remover ativo', { requestId, assetId }, async () => {
+    const supabase = getSupabaseClient();
+    const { error } = await supabase.from('investment_assets').delete().eq('id', assetId);
+    if (error) {
+      throw new Error(`Erro ao remover ativo: ${error.message}`);
+    }
+    return {
+      sucesso: true,
+      mensagem: 'Ativo de investimento removido com sucesso.',
+    };
+  });
 }
 
 /**
