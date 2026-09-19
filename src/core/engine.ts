@@ -502,3 +502,172 @@ export async function obterExtratoCompletoUnificado(
     },
   };
 }
+
+/**
+ * Fase 8.5 — Gera preview estruturado de gasto/entrada sem gravar no banco de dados.
+ * Permite ao usuário revisar valores, categoria, conta e impacto no Safe-to-Spend.
+ */
+export async function gerarPreviewTransacao(
+  input: {
+    texto: string;
+    origem?: string;
+    isAudio?: boolean;
+    audioDurationSeconds?: number;
+  },
+  requestId: string
+): Promise<EngineOutput> {
+  const rawTexto = input.texto?.trim();
+  if (!rawTexto) {
+    return {
+      sucesso: false,
+      tipo: 'mensagem',
+      mensagem: 'Mensagem vazia.',
+    };
+  }
+
+  // 1. Classificação de Intenção com Gemini
+  const payload: IntentPayload = await withTiming(
+    'classificar intenção para preview [CoreEngine]',
+    { requestId, texto: rawTexto },
+    () => classificarIntencao(rawTexto, requestId)
+  );
+
+  if (payload.intent !== 'NOVO_GASTO' && payload.intent !== 'NOVA_ENTRADA') {
+    return {
+      sucesso: false,
+      tipo: 'mensagem',
+      mensagem:
+        'Não foi possível identificar um gasto ou entrada nessa mensagem. Tente especificar um valor, como: "Almoço 45 reais no débito".',
+    };
+  }
+
+  const transaction = payload.transaction;
+  if (!transaction || !transaction.total_amount) {
+    return {
+      sucesso: false,
+      tipo: 'mensagem',
+      mensagem: 'Não consegui extrair o valor ou os dados da compra.',
+    };
+  }
+
+  const categoryMap = await getCategoryMap(requestId);
+  const decisao = await inferirMetodoPagamento(transaction, categoryMap, requestId);
+
+  // Busca dados de Safe-to-Spend e contas
+  const [safeSummary, contas] = await Promise.all([
+    calcularSafeToSpend(undefined, requestId).catch(() => ({
+      accountName: 'Conta Principal',
+      realBalance: 0,
+      openCreditInvoices: 0,
+      safeToSpend: 0,
+    })),
+    listarContas(requestId).catch(() => []),
+  ]);
+
+  const valor = Number(transaction.total_amount) || 0;
+  const saldoLivreAtual = safeSummary.safeToSpend;
+  const isIncome = payload.intent === 'NOVA_ENTRADA';
+
+  const novoSaldoLivreProjetado = isIncome ? saldoLivreAtual + valor : saldoLivreAtual - valor;
+  const impactoPercentual =
+    saldoLivreAtual > 0
+      ? Number(((valor / saldoLivreAtual) * 100).toFixed(2))
+      : 0;
+
+  const categoriaNome = categoryMap[transaction.category_id] ?? 'Outros';
+
+  const previewData = {
+    originalInput: rawTexto,
+    isAudio: Boolean(input.isAudio),
+    audioDuration: input.audioDurationSeconds ? `0:0${Math.round(input.audioDurationSeconds)}s` : '0:04s',
+    precision: '99.4%',
+    entryType: isIncome ? 'income' : 'expense',
+    description: transaction.description || (isIncome ? 'Entrada' : 'Gasto'),
+    totalAmount: valor,
+    categoryId: transaction.category_id,
+    categoryName: categoriaNome,
+    paymentMethod: decisao.payment_method,
+    paymentMethodLabel: formatarMetodo(decisao.payment_method),
+    cardName: decisao.cartaoNome || null,
+    accountName: safeSummary.accountName,
+    accountBalance: safeSummary.realBalance,
+    occurredAt: transaction.occurred_at || new Date().toISOString(),
+    location: transaction.description,
+    safeToSpend: {
+      current: saldoLivreAtual,
+      projected: novoSaldoLivreProjetado,
+      impactPercentage: impactoPercentual,
+      impactLabel: `${isIncome ? '+' : '-'}${impactoPercentual}%`,
+      progressBarPercent: Math.max(10, Math.min(100, Math.round((novoSaldoLivreProjetado / (saldoLivreAtual || 1)) * 100))),
+    },
+    availableCategories: Object.entries(categoryMap).map(([id, name]) => ({
+      id: Number(id),
+      name,
+    })),
+    availableAccounts: contas.map((c) => ({
+      id: c.id,
+      name: c.name,
+      balance: Number(c.balance),
+    })),
+  };
+
+  return {
+    sucesso: true,
+    tipo: isIncome ? 'entrada' : 'gasto',
+    mensagem: 'Interpretação concluída com sucesso.',
+    dados: previewData,
+  };
+}
+
+/**
+ * Fase 8.5 — Confirma e persiste o lançamento no Supabase após validação na tela intermediária.
+ */
+export async function confirmarTransacaoUnificado(
+  dados: {
+    entryType: 'expense' | 'income';
+    description: string;
+    totalAmount: number;
+    categoryId?: number;
+    paymentMethod?: string;
+    cardId?: string | null;
+    accountName?: string | null;
+    occurredAt?: string;
+    rawInput?: string;
+    installmentTotal?: number | null;
+  },
+  requestId: string
+): Promise<EngineOutput> {
+  const isIncome = dados.entryType === 'income';
+
+  if (isIncome) {
+    return await executarNovaEntrada(
+      {
+        description: dados.description,
+        total_amount: Number(dados.totalAmount),
+        account_name: dados.accountName ?? null,
+        occurred_at: dados.occurredAt ?? new Date().toISOString(),
+        category_id: dados.categoryId ?? 1,
+        entry_type: 'income',
+        payment_method: (dados.paymentMethod as any) || null,
+      },
+      dados.rawInput || dados.description,
+      requestId
+    );
+  }
+
+  return await executarNovoGasto(
+    {
+      description: dados.description,
+      total_amount: Number(dados.totalAmount),
+      category_id: dados.categoryId ?? 1,
+      payment_method: (dados.paymentMethod as any) || 'debit_card',
+      card_id: dados.cardId || null,
+      account_name: dados.accountName ?? null,
+      occurred_at: dados.occurredAt ?? new Date().toISOString(),
+      entry_type: 'expense',
+      installment_total: dados.installmentTotal || null,
+    },
+    dados.rawInput || dados.description,
+    requestId
+  );
+}

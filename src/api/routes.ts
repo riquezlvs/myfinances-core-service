@@ -9,6 +9,8 @@ import {
   obterPatrimonioUnificado,
   obterPoupancaUnificado,
   obterExtratoCompletoUnificado,
+  gerarPreviewTransacao,
+  confirmarTransacaoUnificado,
 } from '../core/engine';
 
 /**
@@ -71,6 +73,59 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
+  // Rota: POST /api/chat/preview ou /api/transacoes/interpretar (Preview sem salvar no banco)
+  if ((url === '/api/chat/preview' || url === '/api/transacoes/interpretar') && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      const mensagem = body?.message || body?.texto;
+
+      if (!mensagem || typeof mensagem !== 'string') {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'O campo "message" ou "texto" é obrigatório.',
+        });
+        return true;
+      }
+
+      const resultado = await gerarPreviewTransacao(
+        {
+          texto: mensagem,
+          origem: 'web',
+          isAudio: Boolean(body?.isAudio),
+          audioDurationSeconds: body?.audioDurationSeconds,
+        },
+        requestId
+      );
+
+      sendJson(res, 200, resultado);
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao gerar preview de transação', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao interpretar mensagem.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/chat/confirm ou /api/transacoes/confirmar (Confirmação final e gravação no Supabase)
+  if ((url === '/api/chat/confirm' || url === '/api/transacoes/confirmar') && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      const resultado = await confirmarTransacaoUnificado(body, requestId);
+      sendJson(res, 200, resultado);
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao confirmar transação', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao confirmar transação.',
+      });
+      return true;
+    }
+  }
+
   // Rota: POST /api/chat
   if (url === '/api/chat' && method === 'POST') {
     try {
@@ -82,6 +137,21 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
           sucesso: false,
           mensagem: 'O campo "message" ou "texto" é obrigatório no corpo da requisição.',
         });
+        return true;
+      }
+
+      // Suporte para quando o frontend enviar preview: true
+      if (body?.preview) {
+        const resultado = await gerarPreviewTransacao(
+          {
+            texto: mensagem,
+            origem: 'web',
+            isAudio: Boolean(body?.isAudio),
+            audioDurationSeconds: body?.audioDurationSeconds,
+          },
+          requestId
+        );
+        sendJson(res, 200, resultado);
         return true;
       }
 
