@@ -451,7 +451,7 @@ export async function obterExtratoCompletoUnificado(
       installment_number,
       installment_total,
       categories (id, name),
-      accounts (id, name, type)
+      accounts!account_id (id, name, type)
     `)
     .gte('occurred_at', intervalo.inicioISO)
     .lt('occurred_at', intervalo.fimISO)
