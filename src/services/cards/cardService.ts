@@ -271,6 +271,7 @@ export async function removerCartao(nome: string, requestId: string): Promise<st
 }
 
 export interface NovoCartaoDTO {
+  id?: string;
   name: string;
   closing_day: number;
   due_day?: number;
@@ -282,14 +283,14 @@ export interface NovoCartaoDTO {
   is_virtual?: boolean;
 }
 
-/** Cria um cartão com todos os detalhes e configurações visuais. */
+/** Cria ou atualiza um cartão com todos os detalhes e configurações visuais. */
 export async function cadastrarNovoCartao(
   dto: NovoCartaoDTO,
   requestId: string
 ): Promise<Cartao> {
-  return withTiming('cadastrar novo cartão', { requestId, dto }, async () => {
+  return withTiming('cadastrar ou atualizar cartão', { requestId, dto }, async () => {
     const supabase = getSupabaseClient();
-    const payload = {
+    const payload: any = {
       name: dto.name.trim(),
       closing_day: dto.closing_day,
       due_day: dto.due_day || null,
@@ -301,13 +302,17 @@ export async function cadastrarNovoCartao(
       is_virtual: Boolean(dto.is_virtual),
     };
 
+    if (dto.id && !dto.id.startsWith('temp-') && !dto.id.includes('-default')) {
+      payload.id = dto.id;
+    }
+
     const { data, error } = await supabase
       .from('cards')
-      .upsert(payload, { onConflict: 'name' })
+      .upsert(payload, { onConflict: dto.id && !dto.id.startsWith('temp-') ? 'id' : 'name' })
       .select('id, name, closing_day, card_type, is_default, credit_limit, due_day, card_holder, last_four_digits, color_theme, is_virtual')
       .single();
 
-    if (error) throw new Error(`Erro ao cadastrar cartão: ${error.message}`);
+    if (error) throw new Error(`Erro ao salvar cartão: ${error.message}`);
     const cartao = data as unknown as Cartao;
 
     if (!cartao.is_default) {

@@ -450,6 +450,7 @@ export async function obterExtratoCompletoUnificado(
       raw_input,
       installment_number,
       installment_total,
+      installment_group_id,
       categories (id, name),
       accounts!account_id (id, name, type)
     `)

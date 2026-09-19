@@ -14,6 +14,12 @@ import {
 } from '../core/engine';
 import { obterDadosGraficosDashboard } from '../services/transactions/transactionService';
 import { obterCartoesDetalhados, cadastrarNovoCartao, removerCartao } from '../services/cards/cardService';
+import {
+  obterDadosInvestimentosDashboard,
+  cadastrarAtivoInvestimento,
+  ajustarSaldoInstituicao,
+  obterExtratoInvestimentos,
+} from '../services/investments/investmentService';
 
 /**
  * Utilitário para adicionar cabeçalhos CORS a todas as respostas HTTP
@@ -264,6 +270,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 
       const cartao = await cadastrarNovoCartao(
         {
+          id: body.id ? String(body.id) : undefined,
           name: String(body.name),
           closing_day: Number(body.closing_day),
           due_day: body.due_day ? Number(body.due_day) : undefined,
@@ -288,6 +295,99 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 500, {
         sucesso: false,
         mensagem: err.message || 'Erro ao cadastrar cartão.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: GET /api/investimentos (Consolidação de carteira, alocação e evolução)
+  if (url === '/api/investimentos' && method === 'GET') {
+    try {
+      const dados = await obterDadosInvestimentosDashboard(requestId);
+      sendJson(res, 200, {
+        sucesso: true,
+        dados,
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao obter dados de investimentos', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao carregar dados de investimentos.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/investimentos/ativos (Adicionar novo ativo de investimento)
+  if (url === '/api/investimentos/ativos' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      if (!body?.ticker || !body?.institution || !body?.quantity || !body?.unitPrice) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'Ticker, instituição, quantidade e preço unitário são obrigatórios.',
+        });
+        return true;
+      }
+
+      const resultado = await cadastrarAtivoInvestimento(body, requestId);
+      sendJson(res, 201, resultado);
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao cadastrar ativo de investimento', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao cadastrar ativo de investimento.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/investimentos/ajustar-saldo (Ajuste rápido de saldo de instituição)
+  if (url === '/api/investimentos/ajustar-saldo' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      if (body?.novoSaldo === undefined) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'O campo "novoSaldo" é obrigatório.',
+        });
+        return true;
+      }
+
+      const resultado = await ajustarSaldoInstituicao(body, requestId);
+      sendJson(res, 200, resultado);
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao ajustar saldo de instituição', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao ajustar saldo.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: GET /api/investimentos/extrato (Extrato especializado em investimentos)
+  if (url.startsWith('/api/investimentos/extrato') && method === 'GET') {
+    try {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const mesAno = parsedUrl.searchParams.get('mes') || undefined;
+      const tipo = parsedUrl.searchParams.get('tipo') || undefined;
+      const busca = parsedUrl.searchParams.get('busca') || undefined;
+
+      const dados = await obterExtratoInvestimentos({ mesAno, tipo, busca }, requestId);
+      sendJson(res, 200, {
+        sucesso: true,
+        dados,
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao obter extrato de investimentos', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao carregar extrato de investimentos.',
       });
       return true;
     }
