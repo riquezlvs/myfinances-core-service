@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
 import { log } from '../utils/logger';
+import { getSupabaseClient } from '../clients/supabaseClient';
 import {
   processarTextoEntrada,
   obterResumoUnificado,
