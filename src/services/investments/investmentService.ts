@@ -98,7 +98,7 @@ export async function obterDadosInvestimentosDashboard(requestId: string = 'dash
     const resPct = calcPct(liquidTotal);
     const crPct = calcPct(cryptoTotal);
 
-    const alocacao = [
+    const todasAlocacoes = [
       {
         id: 'rf',
         name: 'Renda Fixa & Tesouro',
@@ -136,6 +136,12 @@ export async function obterDadosInvestimentosDashboard(requestId: string = 'dash
         badge: `${crPct}% Cripto`,
       },
     ];
+
+    // Se houver ativos cadastrados com valor, mostra apenas os que têm valor > 0 para evitar duplicidade ou confusão visual
+    const alocacao = somaAtivos > 0
+      ? todasAlocacoes.filter((a) => a.value > 0)
+      : todasAlocacoes;
+
 
     // Instituições conectadas reais do usuário
     const instituicoes = contasAtivas.map((c) => {

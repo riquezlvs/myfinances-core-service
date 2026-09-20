@@ -275,31 +275,52 @@ export async function removerCartao(idOuNome: string, requestId: string): Promis
   return withTiming('remover cartão', { requestId, idOuNome }, async () => {
     const supabase = getSupabaseClient();
     
-    // Tenta primeiro por ID
-    let { data, error } = await supabase
+    // 1. Localiza o cartão primeiro (por ID ou por Nome) para obter id e name
+    let { data: card, error: errBusca } = await supabase
       .from('cards')
-      .delete()
+      .select('id, name')
       .eq('id', idOuNome)
-      .select('name')
       .maybeSingle();
 
-    // Se não encontrou por ID ou erro de UUID, tenta por name
-    if (!data) {
+    if (!card) {
       const resNome = await supabase
         .from('cards')
-        .delete()
+        .select('id, name')
         .eq('name', idOuNome)
-        .select('name')
         .maybeSingle();
-      
-      data = resNome.data;
-      error = resNome.error;
+      card = resNome.data;
     }
 
-    if (error) throw new Error(`Erro ao remover cartão: ${error.message}`);
-    if (!data) return null;
-    log('info', 'Cartão removido', { requestId, idOuNome, nome: (data as any).name });
-    return (data as any).name as string;
+    if (!card) {
+      log('warn', 'Cartão não encontrado para remoção', { requestId, idOuNome });
+      return null;
+    }
+
+    const cardRealId = (card as any).id;
+    const cardNome = (card as any).name;
+
+    // 2. Desvincula o card_id das transações para não violar foreign key constraint
+    const { error: errUnlink } = await supabase
+      .from('transactions')
+      .update({ card_id: null })
+      .eq('card_id', cardRealId);
+
+    if (errUnlink) {
+      log('warn', 'Aviso ao desvincular transações do cartão', { requestId, erro: errUnlink.message });
+    }
+
+    // 3. Exclui o cartão do banco
+    const { error: errDel } = await supabase
+      .from('cards')
+      .delete()
+      .eq('id', cardRealId);
+
+    if (errDel) {
+      throw new Error(`Erro ao remover cartão: ${errDel.message}`);
+    }
+
+    log('info', 'Cartão removido com sucesso', { requestId, idOuNome, nome: cardNome });
+    return cardNome as string;
   });
 }
 

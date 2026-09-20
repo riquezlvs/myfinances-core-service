@@ -101,10 +101,11 @@ export interface PessoaComSaldo {
 
 export async function listarPessoasComSaldos(
   busca?: string,
-  requestId?: string
+  requestId?: string,
+  mesAno?: string
 ): Promise<PessoaComSaldo[]> {
   const reqId = requestId || 'req-people-list';
-  return withTiming('listar pessoas com saldos', { requestId: reqId, busca }, async () => {
+  return withTiming('listar pessoas com saldos', { requestId: reqId, busca, mesAno }, async () => {
     const supabase = getSupabaseClient();
 
     // 1. Busca todas as pessoas cadastradas
@@ -120,21 +121,23 @@ export async function listarPessoasComSaldos(
     }
 
     // 2. Busca todas as transações com dívida/split
-    const { data: transacoesDividas, error: erroDividas } = await supabase
+    let queryDividas = supabase
       .from('transactions')
       .select('display_id, description, third_party_id, third_party_share_amount, occurred_at')
-      .gt('third_party_share_amount', 0);
+      .gt('third_party_share_amount', 0)
+      .order('occurred_at', { ascending: false });
 
+    const { data: transacoesDividas, error: erroDividas } = await queryDividas;
     if (erroDividas) throw new Error(`Erro ao buscar dívidas: ${erroDividas.message}`);
 
     // 3. Busca todos os pagamentos de dívidas
     const { data: pagamentos, error: erroPagamentos } = await supabase
       .from('debt_payments')
-      .select('person_id, amount');
+      .select('person_id, amount, paid_at, created_at');
 
     if (erroPagamentos) throw new Error(`Erro ao buscar pagamentos de dívidas: ${erroPagamentos.message}`);
 
-    // Agrupa pagamentos por person_id
+    // Agrupa pagamentos por person_id (total e filtrado se houver mesAno)
     const pagamentosPorId = new Map<string, number>();
     for (const p of pagamentos ?? []) {
       const atual = pagamentosPorId.get(p.person_id) ?? 0;
@@ -152,11 +155,22 @@ export async function listarPessoasComSaldos(
 
     // Monta resposta com cálculo de saldo para cada pessoa
     return pessoas.map((p: any) => {
-      const dividasDaPessoa = dividasPorId.get(p.id) ?? [];
-      const totalOriginal = dividasDaPessoa.reduce(
+      const todasDividas = dividasPorId.get(p.id) ?? [];
+      
+      // Se mesAno informado (ex: "2026-09"), filtra itens cujo occurred_at comece com mesAno
+      const dividasFiltradas = mesAno
+        ? todasDividas.filter((d: any) => d.occurred_at && d.occurred_at.startsWith(mesAno))
+        : todasDividas;
+
+      const totalOriginal = todasDividas.reduce(
         (acc: number, curr: any) => acc + Number(curr.third_party_share_amount || 0),
         0
       );
+      const totalMesOriginal = dividasFiltradas.reduce(
+        (acc: number, curr: any) => acc + Number(curr.third_party_share_amount || 0),
+        0
+      );
+
       const totalPago = pagamentosPorId.get(p.id) ?? 0;
       const saldoDevedor = Math.max(0, Math.round((totalOriginal - totalPago) * 100) / 100);
 
@@ -169,7 +183,7 @@ export async function listarPessoasComSaldos(
         initials = (nomes[0][0] + nomes[nomes.length - 1][0]).toUpperCase();
       }
 
-      const itensInclusos = dividasDaPessoa.map((d: any) => ({
+      const itensInclusos = (mesAno ? dividasFiltradas : todasDividas).map((d: any) => ({
         displayId: d.display_id,
         description: d.description,
         amount: Number(d.third_party_share_amount || 0),
@@ -182,7 +196,7 @@ export async function listarPessoasComSaldos(
         created_at: p.created_at,
         initials,
         saldoDevedor,
-        totalOriginal,
+        totalOriginal: mesAno ? totalMesOriginal : totalOriginal,
         totalPago,
         status: saldoDevedor > 0 ? ('Em aberto' as const) : ('Zerado' as const),
         itensInclusos,

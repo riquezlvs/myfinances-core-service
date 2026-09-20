@@ -237,10 +237,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         const numericId = parseInt(idParam, 10);
         let txData: any = null;
 
-        // Tenta buscar com joins
-        const { data: dataWithRelations, error: errRel } = await supabase
+        let queryWithRel = supabase
           .from('transactions')
           .select(`
+            id,
             display_id,
             description,
             total_amount,
@@ -252,19 +252,27 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             installment_total,
             installment_group_id,
             observation,
+            account_id,
+            category_id,
             categories (id, name),
             accounts (id, name, type)
-          `)
-          .eq('display_id', isNaN(numericId) ? 0 : numericId)
-          .maybeSingle();
+          `);
+
+        if (!isNaN(numericId) && String(numericId) === idParam.trim()) {
+          queryWithRel = queryWithRel.eq('display_id', numericId);
+        } else {
+          queryWithRel = queryWithRel.eq('id', idParam.trim());
+        }
+
+        const { data: dataWithRelations, error: errRel } = await queryWithRel.maybeSingle();
 
         if (!errRel && dataWithRelations) {
           txData = dataWithRelations;
         } else {
-          // Fallback sem join caso a relação com accounts tenha outro alias
-          const { data: simpleData } = await supabase
+          let simpleQuery = supabase
             .from('transactions')
             .select(`
+              id,
               display_id,
               description,
               total_amount,
@@ -276,10 +284,18 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
               installment_total,
               installment_group_id,
               observation,
+              account_id,
+              category_id,
               categories (id, name)
-            `)
-            .eq('display_id', isNaN(numericId) ? 0 : numericId)
-            .maybeSingle();
+            `);
+
+          if (!isNaN(numericId) && String(numericId) === idParam.trim()) {
+            simpleQuery = simpleQuery.eq('display_id', numericId);
+          } else {
+            simpleQuery = simpleQuery.eq('id', idParam.trim());
+          }
+
+          const { data: simpleData } = await simpleQuery.maybeSingle();
           txData = simpleData;
         }
 
@@ -308,6 +324,57 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 500, {
         sucesso: false,
         mensagem: 'Erro ao carregar dados do extrato.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: GET /api/categories (Lista categorias disponíveis no sistema)
+  if (url === '/api/categories' && method === 'GET') {
+    try {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase
+        .from('categories')
+        .select('id, name')
+        .order('name', { ascending: true });
+
+      if (error) throw error;
+      sendJson(res, 200, {
+        sucesso: true,
+        dados: data || [],
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao listar categorias', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao carregar categorias.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: GET /api/accounts (Lista contas e carteiras disponíveis no sistema)
+  if (url === '/api/accounts' && method === 'GET') {
+    try {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase
+        .from('accounts')
+        .select('id, name, type, balance')
+        .eq('is_active', true)
+        .order('name', { ascending: true });
+
+      if (error) throw error;
+      sendJson(res, 200, {
+        sucesso: true,
+        dados: data || [],
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao listar contas', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao carregar contas.',
       });
       return true;
     }
@@ -749,8 +816,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     try {
       const parsedUrl = new URL(url, 'http://localhost');
       const busca = parsedUrl.searchParams.get('busca') || parsedUrl.searchParams.get('q') || undefined;
+      const mesAno = parsedUrl.searchParams.get('mes') || parsedUrl.searchParams.get('mesAno') || undefined;
 
-      const pessoas = await listarPessoasComSaldos(busca, requestId);
+      const pessoas = await listarPessoasComSaldos(busca, requestId, mesAno);
       sendJson(res, 200, {
         sucesso: true,
         dados: pessoas,
