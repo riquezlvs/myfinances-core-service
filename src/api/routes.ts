@@ -229,6 +229,51 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     try {
       const parsedUrl = new URL(url, 'http://localhost');
       const mesAno = parsedUrl.searchParams.get('mes') || parsedUrl.searchParams.get('mesAno') || undefined;
+      const idParam = parsedUrl.searchParams.get('id') || undefined;
+
+      if (idParam) {
+        const supabase = getSupabaseClient();
+        const numericId = parseInt(idParam, 10);
+        const { data, error } = await supabase
+          .from('transactions')
+          .select(`
+            display_id,
+            description,
+            total_amount,
+            occurred_at,
+            payment_method,
+            entry_type,
+            raw_input,
+            installment_number,
+            installment_total,
+            installment_group_id,
+            observation,
+            categories (id, name),
+            accounts!account_id (id, name, type)
+          `)
+          .eq('display_id', isNaN(numericId) ? 0 : numericId)
+          .maybeSingle();
+
+        if (error) {
+          throw error;
+        }
+
+        sendJson(res, 200, {
+          sucesso: true,
+          dados: {
+            mesAno: mesAno || '',
+            rotuloMes: '',
+            totalEntradas: data?.entry_type === 'income' ? Number(data.total_amount) : 0,
+            countEntradas: data?.entry_type === 'income' ? 1 : 0,
+            totalSaidas: data?.entry_type === 'expense' ? Number(data.total_amount) : 0,
+            countSaidas: data?.entry_type === 'expense' ? 1 : 0,
+            liquidoNoMes: 0,
+            totalLancamentos: data ? 1 : 0,
+            itens: data ? [data] : [],
+          },
+        });
+        return true;
+      }
 
       const resultado = await obterExtratoCompletoUnificado({ mesAno }, requestId);
       sendJson(res, 200, resultado);
