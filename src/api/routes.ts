@@ -13,7 +13,7 @@ import {
   gerarPreviewTransacao,
   confirmarTransacaoUnificado,
 } from '../core/engine';
-import { obterDadosGraficosDashboard } from '../services/transactions/transactionService';
+import { obterDadosGraficosDashboard, apagarTransacaoComGrupo } from '../services/transactions/transactionService';
 import { obterCartoesDetalhados, cadastrarNovoCartao, removerCartao } from '../services/cards/cardService';
 import {
   obterDadosInvestimentosDashboard,
@@ -25,7 +25,7 @@ import {
   obterExtratoInvestimentos,
 } from '../services/investments/investmentService';
 import { listarPessoasComSaldos, cadastrarNovaPessoa } from '../services/people/peopleService';
-import { getSaldoTerceiros, registrarPagamentoNoBanco, processarPagamento } from '../services/debts/debtService';
+import { getSaldoTerceiros, registrarPagamentoNoBanco, processarPagamento, salvarDividida } from '../services/debts/debtService';
 
 
 /**
@@ -235,7 +235,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       if (idParam) {
         const supabase = getSupabaseClient();
         const numericId = parseInt(idParam, 10);
-        const { data, error } = await supabase
+        let txData: any = null;
+
+        // Tenta buscar com joins
+        const { data: dataWithRelations, error: errRel } = await supabase
           .from('transactions')
           .select(`
             display_id,
@@ -250,13 +253,34 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             installment_group_id,
             observation,
             categories (id, name),
-            accounts!account_id (id, name, type)
+            accounts (id, name, type)
           `)
           .eq('display_id', isNaN(numericId) ? 0 : numericId)
           .maybeSingle();
 
-        if (error) {
-          throw error;
+        if (!errRel && dataWithRelations) {
+          txData = dataWithRelations;
+        } else {
+          // Fallback sem join caso a relação com accounts tenha outro alias
+          const { data: simpleData } = await supabase
+            .from('transactions')
+            .select(`
+              display_id,
+              description,
+              total_amount,
+              occurred_at,
+              payment_method,
+              entry_type,
+              raw_input,
+              installment_number,
+              installment_total,
+              installment_group_id,
+              observation,
+              categories (id, name)
+            `)
+            .eq('display_id', isNaN(numericId) ? 0 : numericId)
+            .maybeSingle();
+          txData = simpleData;
         }
 
         sendJson(res, 200, {
@@ -264,13 +288,13 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
           dados: {
             mesAno: mesAno || '',
             rotuloMes: '',
-            totalEntradas: data?.entry_type === 'income' ? Number(data.total_amount) : 0,
-            countEntradas: data?.entry_type === 'income' ? 1 : 0,
-            totalSaidas: data?.entry_type === 'expense' ? Number(data.total_amount) : 0,
-            countSaidas: data?.entry_type === 'expense' ? 1 : 0,
+            totalEntradas: txData?.entry_type === 'income' ? Number(txData.total_amount) : 0,
+            countEntradas: txData?.entry_type === 'income' ? 1 : 0,
+            totalSaidas: txData?.entry_type === 'expense' ? Number(txData.total_amount) : 0,
+            countSaidas: txData?.entry_type === 'expense' ? 1 : 0,
             liquidoNoMes: 0,
-            totalLancamentos: data ? 1 : 0,
-            itens: data ? [data] : [],
+            totalLancamentos: txData ? 1 : 0,
+            itens: txData ? [txData] : [],
           },
         });
         return true;
@@ -284,6 +308,168 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 500, {
         sucesso: false,
         mensagem: 'Erro ao carregar dados do extrato.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/transactions/excluir ou DELETE /api/transactions
+  if (
+    (url === '/api/transactions/excluir' && method === 'POST') ||
+    (url.startsWith('/api/transactions') && method === 'DELETE')
+  ) {
+    try {
+      const parsedUrl = new URL(url, 'http://localhost');
+      let displayId = parsedUrl.searchParams.get('display_id') || parsedUrl.searchParams.get('id');
+
+      if (!displayId && method === 'POST') {
+        const body = await parseJsonBody(req);
+        displayId = body?.display_id || body?.id;
+      }
+
+      const numId = parseInt(String(displayId), 10);
+      if (isNaN(numId)) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'O campo "display_id" ou "id" numérico é obrigatório.',
+        });
+        return true;
+      }
+
+      const resultado = await apagarTransacaoComGrupo(numId, requestId);
+      sendJson(res, 200, {
+        sucesso: true,
+        mensagem: 'Lançamento excluído com sucesso do banco de dados!',
+        dados: resultado,
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao excluir transação', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao excluir transação no banco de dados.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: PUT ou POST /api/transactions/editar (Atualização real de lançamento)
+  if (
+    (url === '/api/transactions/editar' && method === 'POST') ||
+    (url.startsWith('/api/transactions') && (method === 'PUT' || method === 'PATCH'))
+  ) {
+    try {
+      const body = await parseJsonBody(req);
+      const parsedUrl = new URL(url, 'http://localhost');
+      const displayId = body?.display_id || body?.id || parsedUrl.searchParams.get('display_id') || parsedUrl.searchParams.get('id');
+
+      const numId = parseInt(String(displayId), 10);
+      if (isNaN(numId)) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'O campo "display_id" numérico é obrigatório para atualização.',
+        });
+        return true;
+      }
+
+      const supabase = getSupabaseClient();
+      const updatePayload: Record<string, any> = {};
+
+      if (body.description !== undefined) updatePayload.description = String(body.description).trim();
+      if (body.total_amount !== undefined) updatePayload.total_amount = Number(body.total_amount);
+      if (body.occurred_at !== undefined) updatePayload.occurred_at = body.occurred_at;
+      if (body.payment_method !== undefined) updatePayload.payment_method = body.payment_method;
+      if (body.entry_type !== undefined) updatePayload.entry_type = body.entry_type;
+      if (body.observation !== undefined) updatePayload.observation = body.observation;
+      if (body.category_id !== undefined) updatePayload.category_id = Number(body.category_id);
+
+      const { data, error } = await supabase
+        .from('transactions')
+        .update(updatePayload)
+        .eq('display_id', numId)
+        .select(`
+          display_id,
+          description,
+          total_amount,
+          occurred_at,
+          payment_method,
+          entry_type,
+          observation,
+          categories (id, name)
+        `)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      sendJson(res, 200, {
+        sucesso: true,
+        mensagem: 'Transação atualizada com sucesso no banco de dados!',
+        dados: data,
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao atualizar transação', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao atualizar transação no banco de dados.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/debts/split (Divisão de despesa com pessoas reais)
+  if (url === '/api/debts/split' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      const { display_id, pessoas } = body || {};
+
+      if (!pessoas || !Array.isArray(pessoas) || pessoas.length === 0) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'Informe a lista de pessoas para divisão.',
+        });
+        return true;
+      }
+
+      const supabase = getSupabaseClient();
+      let tx: any = null;
+
+      if (display_id) {
+        const { data: t } = await supabase
+          .from('transactions')
+          .select('description, total_amount, category_id, payment_method, occurred_at')
+          .eq('display_id', parseInt(String(display_id), 10))
+          .maybeSingle();
+        tx = t;
+      }
+
+      const descricao = body.description || tx?.description || 'Despesa dividida';
+      const total = Number(body.total_amount || tx?.total_amount || 0);
+      const categoryId = Number(body.category_id || tx?.category_id || 1);
+      const paymentMethod = body.payment_method || tx?.payment_method || 'pix';
+      const ocorreuEm = body.occurred_at || tx?.occurred_at || new Date().toISOString();
+
+      const resultado = await salvarDividida({
+        descricao,
+        total,
+        categoryId,
+        paymentMethod,
+        ocorreuEm,
+        pessoas: pessoas.map((p: any) => typeof p === 'string' ? p : p.name || p.nome),
+        requestId,
+      });
+
+      sendJson(res, 200, {
+        sucesso: true,
+        mensagem: 'Divisão com amigos salva no banco de dados!',
+        dados: resultado,
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao processar divisão com amigos', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao salvar divisão com amigos.',
       });
       return true;
     }
