@@ -397,7 +397,7 @@ export async function getUltimosGastos(limite: number, requestId: string) {
     // 8.7 — Filas de dívida do split têm total_amount = 0: não são gastos.
     const { data, error } = await getSupabaseClient()
       .from('transactions')
-      .select('display_id, description, total_amount, occurred_at, payment_method, categories(name)')
+      .select('display_id, description, total_amount, occurred_at, payment_method, entry_type, installment_number, installment_total, installment_group_id, categories(name)')
       .gt('total_amount', 0)
       .order('occurred_at', { ascending: false })
       .limit(limite);
