@@ -3,7 +3,7 @@ import { ThinkingLevel } from '@google/genai';
 import { getGeminiClient } from '../../clients/geminiClient';
 import { withTiming, log } from '../../utils/logger';
 import { withTimeout } from '../../utils/timeout';
-import { GEMINI_MODEL, GEMINI_TIMEOUT_MS } from '../../config/constants';
+import { GEMINI_MODEL, GEMINI_FALLBACK_MODEL, GEMINI_TIMEOUT_MS } from '../../config/constants';
 import { buildPayloadSchema } from './schemas';
 import { buildPayloadPrompt, SISTEMA_INTENT } from './prompts';
 import { getCategoryMap } from '../categories/categoryCache';
@@ -18,29 +18,50 @@ import type { IntentPayload } from '../../types/transaction';
  * transaction. Em caso de qualquer falha de parsing/validação, faz fallback
  * seguro para OUTROS — nunca deixa o handler principal quebrar.
  *
- * Segurança: o LLM NUNCA executa nada; só retorna JSON que passa pelos
- * guards (Zod + allowlist). Não existem intents destrutivas neste enum:
- * "apagar/remover" se degrada para CONFIRMACAO_REQUERIDA.
+ * Resiliência: caso o modelo primário atinja limite de quota (429/RESOURCE_EXHAUSTED),
+ * tenta automaticamente o GEMINI_FALLBACK_MODEL antes de abortar.
  */
 export async function classificarIntencao(texto: string, requestId: string): Promise<IntentPayload> {
   return withTiming('classificar intenção + extrair dados (Gemini)', { requestId, modelo: GEMINI_MODEL }, async () => {
     const categoryMap = await getCategoryMap(requestId);
     const agoraISO = new Date().toISOString();
 
-    const response = await withTimeout(
-      getGeminiClient().models.generateContent({
-        model: GEMINI_MODEL,
-        contents: buildPayloadPrompt(texto, agoraISO, categoryMap),
-        config: {
-          systemInstruction: SISTEMA_INTENT,
-          responseMimeType: 'application/json',
-          responseSchema: buildPayloadSchema(categoryMap),
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        },
-      }),
-      GEMINI_TIMEOUT_MS,
-      'Tempo limite excedido ao chamar o Gemini (classificação de intenção).'
-    );
+    const chamarModelo = async (modelo: string) => {
+      return withTimeout(
+        getGeminiClient().models.generateContent({
+          model: modelo,
+          contents: buildPayloadPrompt(texto, agoraISO, categoryMap),
+          config: {
+            systemInstruction: SISTEMA_INTENT,
+            responseMimeType: 'application/json',
+            responseSchema: buildPayloadSchema(categoryMap),
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          },
+        }),
+        GEMINI_TIMEOUT_MS,
+        'Tempo limite excedido ao chamar o Gemini (classificação de intenção).'
+      );
+    };
+
+    let response: any;
+    try {
+      response = await chamarModelo(GEMINI_MODEL);
+    } catch (err: any) {
+      const isQuotaError =
+        err?.status === 'RESOURCE_EXHAUSTED' ||
+        err?.message?.includes('429') ||
+        err?.message?.includes('RESOURCE_EXHAUSTED') ||
+        err?.error?.code === 429;
+
+      if (isQuotaError && GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) {
+        log('warn', `Quota excedida no modelo ${GEMINI_MODEL}. Tentando modelo fallback ${GEMINI_FALLBACK_MODEL}...`, {
+          requestId,
+        });
+        response = await chamarModelo(GEMINI_FALLBACK_MODEL);
+      } else {
+        throw err;
+      }
+    }
 
     const jsonText = response.text;
     if (!jsonText) {

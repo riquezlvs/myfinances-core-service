@@ -114,4 +114,30 @@ describe('classificarIntencao — extração de params granulares (8.4)', () => 
     expect(payloadAjuste.params.nomeConta).toBe('Nubank');
     expect(payloadAjuste.params.saldoAjuste).toBe(2500);
   });
+
+  it('aciona modelo fallback quando o modelo principal estoura quota (429 RESOURCE_EXHAUSTED)', async () => {
+    // 1ª chamada (modelo padrão): falha com 429
+    mockGenerateContent.mockRejectedValueOnce({
+      status: 'RESOURCE_EXHAUSTED',
+      message: 'Quota exceeded for model',
+      error: { code: 429 },
+    });
+
+    // 2ª chamada (modelo fallback): sucede
+    mockGenerateContent.mockResolvedValueOnce({
+      text: payloadGemini('NOVO_GASTO', {}, {
+        description: 'Uber corrida',
+        total_amount: 29.23,
+        category_id: 2,
+        occurred_at: '2026-09-27T00:20:00.000Z',
+      }),
+    });
+
+    const payload = await classificarIntencao('29,23 uber 00:20', 'req-fallback');
+
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    expect(payload.intent).toBe('NOVO_GASTO');
+    expect(payload.transaction?.total_amount).toBe(29.23);
+    expect(payload.transaction?.description).toBe('Uber corrida');
+  });
 });
