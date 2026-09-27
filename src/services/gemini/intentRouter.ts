@@ -47,14 +47,18 @@ export async function classificarIntencao(texto: string, requestId: string): Pro
     try {
       response = await chamarModelo(GEMINI_MODEL);
     } catch (err: any) {
-      const isQuotaError =
+      const isFallbackError =
         err?.status === 'RESOURCE_EXHAUSTED' ||
+        err?.status === 'NOT_FOUND' ||
+        err?.error?.code === 429 ||
+        err?.error?.code === 404 ||
         err?.message?.includes('429') ||
+        err?.message?.includes('404') ||
         err?.message?.includes('RESOURCE_EXHAUSTED') ||
-        err?.error?.code === 429;
+        err?.message?.includes('no longer available');
 
-      if (isQuotaError && GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) {
-        log('warn', `Quota excedida no modelo ${GEMINI_MODEL}. Tentando modelo fallback ${GEMINI_FALLBACK_MODEL}...`, {
+      if (isFallbackError && GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) {
+        log('warn', `Erro no modelo principal ${GEMINI_MODEL} (${err?.status || err?.message}). Tentando fallback ${GEMINI_FALLBACK_MODEL}...`, {
           requestId,
         });
         response = await chamarModelo(GEMINI_FALLBACK_MODEL);
