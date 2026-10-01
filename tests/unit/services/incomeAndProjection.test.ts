@@ -1,8 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { calcularDataEfetivaRecorrencia } from '../../../src/services/recurring/recurringService';
+import {
+  calcularDataEfetivaRecorrencia,
+  cadastrarNovaRecorrencia,
+} from '../../../src/services/recurring/recurringService';
 import { registrarReceitaAvulsa } from '../../../src/services/incomes/incomeService';
 import { getSupabaseClient } from '../../../src/clients/supabaseClient';
 import * as accountService from '../../../src/services/accounts/accountService';
+import * as categoryCache from '../../../src/services/categories/categoryCache';
 
 vi.mock('../../../src/clients/supabaseClient');
 vi.mock('../../../src/utils/logger', () => ({
@@ -92,4 +95,87 @@ describe('Receitas Avulsas (Freelance / Terceiros / Extras)', () => {
     spyObterConta.mockRestore();
     spyCreditar.mockRestore();
   });
+
+  it('cadastra recorrência de renda sem category_id atribuindo categoria padrão sem estourar constraint', async () => {
+    let payloadInserido: any = null;
+
+    const singleMock = vi.fn().mockImplementation(() => ({
+      data: {
+        id: 'rec-salario-1',
+        description: 'Salário CLT',
+        total_amount: 5500,
+        day_of_month: 5,
+        entry_type: 'income',
+        category_id: payloadInserido?.category_id,
+        is_active: true,
+      },
+      error: null,
+    }));
+
+    const selectMock = vi.fn().mockReturnValue({ single: singleMock });
+    const insertMock = vi.fn().mockImplementation((payload) => {
+      payloadInserido = payload;
+      return { select: selectMock };
+    });
+
+    mockFrom.mockReturnValue({ insert: insertMock });
+
+    // Mock do catálogo com categoria "Receitas" (ID 10)
+    const spyCategory = vi.spyOn(categoryCache, 'obterCategoriaPadrao').mockResolvedValue(10);
+
+    const resultado = await cadastrarNovaRecorrencia({
+      description: 'Salário CLT',
+      total_amount: 5500,
+      day_of_month: 5,
+      entry_type: 'income',
+      income_type: 'salary',
+      weekend_rule: 'anticipate',
+      // category_id omitido intencionalmente
+    }, 'req-test-rec');
+
+    expect(resultado.id).toBe('rec-salario-1');
+    expect(payloadInserido).not.toBeNull();
+    expect(payloadInserido.category_id).toBe(10);
+    expect(payloadInserido.entry_type).toBe('income');
+    expect(payloadInserido.weekend_rule).toBe('anticipate');
+
+    spyCategory.mockRestore();
+  });
+
+  it('cadastra recorrência com category_id explícito respeitando a escolha', async () => {
+    let payloadInserido: any = null;
+
+    const singleMock = vi.fn().mockImplementation(() => ({
+      data: {
+        id: 'rec-2',
+        description: 'Bolsa',
+        total_amount: 800,
+        day_of_month: 10,
+        entry_type: 'income',
+        category_id: 3,
+        is_active: true,
+      },
+      error: null,
+    }));
+
+    const selectMock = vi.fn().mockReturnValue({ single: singleMock });
+    const insertMock = vi.fn().mockImplementation((payload) => {
+      payloadInserido = payload;
+      return { select: selectMock };
+    });
+
+    mockFrom.mockReturnValue({ insert: insertMock });
+
+    const resultado = await cadastrarNovaRecorrencia({
+      description: 'Bolsa',
+      total_amount: 800,
+      day_of_month: 10,
+      entry_type: 'income',
+      category_id: 3,
+    }, 'req-test-rec-2');
+
+    expect(resultado.id).toBe('rec-2');
+    expect(payloadInserido.category_id).toBe(3);
+  });
 });
+

@@ -14,6 +14,7 @@ import { log, withTiming } from '../../utils/logger';
  */
 
 import { creditarSaldo } from '../accounts/accountService';
+import { obterCategoriaPadrao } from '../categories/categoryCache';
 
 export interface RecurringTransactionRow {
   id: string;
@@ -225,8 +226,13 @@ export async function cadastrarNovaRecorrencia(
     } else if (entryType === 'expense') {
       payload.payment_method = 'credit_card';
     }
-    if (dados.category_id) {
-      payload.category_id = dados.category_id;
+
+    let categoryId = dados.category_id;
+    if (!categoryId) {
+      categoryId = await obterCategoriaPadrao(requestId, entryType);
+    }
+    if (categoryId) {
+      payload.category_id = categoryId;
     }
 
     const { data, error } = await supabase
@@ -326,13 +332,16 @@ export async function materializarRecorrencia(
     const mesAtual = primeiroDiaDoMesAtual();
     const isIncome = recorrencia.entry_type === 'income';
 
+    const categoriaMaterializacao =
+      recorrencia.category_id ?? (await obterCategoriaPadrao(requestId, recorrencia.entry_type ?? 'expense'));
+
     // Insere a transação recorrente.
     const { data, error } = await supabase
       .from('transactions')
       .insert({
         description: recorrencia.description,
         total_amount: recorrencia.total_amount,
-        category_id: recorrencia.category_id ?? null,
+        category_id: categoriaMaterializacao,
         payment_method: recorrencia.payment_method ?? (isIncome ? 'pix' : 'credit_card'),
         occurred_at: new Date().toISOString(),
         my_share_amount: recorrencia.my_share_amount ?? null,

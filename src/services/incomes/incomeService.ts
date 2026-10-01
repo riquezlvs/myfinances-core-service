@@ -1,6 +1,7 @@
 import { getSupabaseClient } from '../../clients/supabaseClient';
 import { withTiming, log } from '../../utils/logger';
 import { creditarSaldo, obterContaPorId } from '../accounts/accountService';
+import { obterCategoriaPadrao } from '../categories/categoryCache';
 
 export interface NovaReceitaInput {
   description: string;
@@ -47,7 +48,10 @@ export async function registrarReceitaAvulsa(
       }
     }
 
-    // 2. Insere na tabela transactions
+    // 2. Resolve categoria padrão se não informada
+    const categoryId = dados.categoryId ?? (await obterCategoriaPadrao(requestId, 'income'));
+
+    // 3. Insere na tabela transactions
     const { data, error } = await supabase
       .from('transactions')
       .insert({
@@ -57,7 +61,7 @@ export async function registrarReceitaAvulsa(
         occurred_at: dataOcorrencia.toISOString(),
         account_id: dados.accountId || null,
         payment_method: dados.paymentMethod || 'pix',
-        category_id: dados.categoryId || null,
+        category_id: categoryId,
         location: dados.location || null,
       })
       .select('display_id, description, total_amount, occurred_at')
