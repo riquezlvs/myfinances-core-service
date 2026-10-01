@@ -18,7 +18,7 @@ import { calcularSafeToSpend, listarContas } from '../services/accounts/accountS
 import { listarMetas } from '../services/budgets/budgetService';
 import { obterResumoPatrimonio } from '../services/patrimony/patrimonyService';
 import { listarMetasPoupanca } from '../services/savings/savingsService';
-import { cadastrarNovaRecorrencia } from '../services/recurring/recurringService';
+import { cadastrarNovaRecorrencia, calcularDataEfetivaRecorrencia } from '../services/recurring/recurringService';
 import { formatarReal, formatarMetodo, formatarDataCurta } from '../utils/formatters';
 import { extrairNomeEValorDeFrase } from '../utils/textParsers';
 import { getSupabaseClient } from '../clients/supabaseClient';
@@ -454,6 +454,7 @@ export async function obterExtratoCompletoUnificado(
       installment_number,
       installment_total,
       installment_group_id,
+      is_recurring,
       categories (id, name),
       accounts!account_id (id, name, type)
     `)
@@ -489,6 +490,109 @@ export async function obterExtratoCompletoUnificado(
 
   const liquidoNoMes = totalEntradas - totalSaidas;
 
+  // Busca as regras de recorrência ativas para mapear as entradas e saídas programadas deste mês
+  let recorrenciasFormatadas: any[] = [];
+  const totaisRecorrentes = {
+    totalEntradasPrevistas: 0,
+    totalSaidasPrevistas: 0,
+    totalEntradasRealizadas: 0,
+    totalSaidasRealizadas: 0,
+    saldoLiquidoRecorrente: 0,
+  };
+
+  try {
+    const [recRes, accRes, catRes] = await Promise.all([
+      supabase
+        .from('recurring_transactions')
+        .select('*')
+        .eq('is_active', true)
+        .order('day_of_month', { ascending: true }),
+      supabase.from('accounts').select('id, name, type'),
+      supabase.from('categories').select('id, name'),
+    ]);
+
+    const contasMap: Record<string, string> = {};
+    if (accRes.data) {
+      for (const a of accRes.data) contasMap[a.id] = a.name;
+    }
+
+    const catMap: Record<number, string> = {};
+    if (catRes.data) {
+      for (const c of catRes.data) catMap[c.id] = c.name;
+    }
+
+    const [anoStr, mesStr] = mes.split('-');
+    const anoNum = parseInt(anoStr, 10);
+    const mesZeroIndexed = parseInt(mesStr, 10) - 1;
+
+    const rawRecorrencias = (recRes.data ?? []) as any[];
+
+    for (const rec of rawRecorrencias) {
+      const dataEfetiva = calcularDataEfetivaRecorrencia(
+        rec.day_of_month,
+        anoNum,
+        mesZeroIndexed,
+        rec.weekend_rule || (rec.entry_type === 'income' ? 'anticipate' : 'postpone')
+      );
+      const anoEf = dataEfetiva.getUTCFullYear();
+      const mesEf = String(dataEfetiva.getUTCMonth() + 1).padStart(2, '0');
+      const diaEf = String(dataEfetiva.getUTCDate()).padStart(2, '0');
+      const dataEfetivaFormatada = `${anoEf}-${mesEf}-${diaEf}`;
+
+      // Verifica se já existe uma transação no extrato deste mês correspondente a esta recorrência específica
+      const descLower = (rec.description || '').toLowerCase().trim();
+      const jaRealizada = todas.some((t) => {
+        const tDescLower = (t.description || '').toLowerCase().trim();
+        const mesmoTipo = t.entry_type === rec.entry_type;
+        const bateDescricao =
+          tDescLower === descLower ||
+          tDescLower.includes(descLower) ||
+          descLower.includes(tDescLower);
+        return mesmoTipo && bateDescricao;
+      });
+
+      const valor = Number(rec.total_amount) || 0;
+      const isIncome = rec.entry_type === 'income';
+
+      if (isIncome) {
+        totaisRecorrentes.totalEntradasPrevistas += valor;
+        if (jaRealizada) {
+          totaisRecorrentes.totalEntradasRealizadas += valor;
+        }
+      } else {
+        totaisRecorrentes.totalSaidasPrevistas += valor;
+        if (jaRealizada) {
+          totaisRecorrentes.totalSaidasRealizadas += valor;
+        }
+      }
+
+      recorrenciasFormatadas.push({
+        id: rec.id,
+        description: rec.description,
+        total_amount: valor,
+        day_of_month: rec.day_of_month,
+        dataEfetivaFormatada,
+        entry_type: rec.entry_type || 'expense',
+        income_type: rec.income_type || null,
+        weekend_rule: rec.weekend_rule || 'postpone',
+        account_id: rec.account_id || null,
+        account_name: rec.account_id ? contasMap[rec.account_id] || null : null,
+        category_id: rec.category_id || null,
+        category_name: rec.category_id ? catMap[rec.category_id] || null : null,
+        payment_method: rec.payment_method || null,
+        status: jaRealizada ? 'realizada' : 'prevista',
+      });
+    }
+
+    totaisRecorrentes.saldoLiquidoRecorrente =
+      totaisRecorrentes.totalEntradasPrevistas - totaisRecorrentes.totalSaidasPrevistas;
+  } catch (errRec: any) {
+    log('warn', 'Aviso ao calcular recorrências do mês no extrato', {
+      requestId,
+      erro: errRec.message,
+    });
+  }
+
   return {
     sucesso: true,
     tipo: 'consulta',
@@ -503,6 +607,8 @@ export async function obterExtratoCompletoUnificado(
       liquidoNoMes,
       totalLancamentos: todas.length,
       itens: todas,
+      recorrencias: recorrenciasFormatadas,
+      totaisRecorrentes,
     },
   };
 }

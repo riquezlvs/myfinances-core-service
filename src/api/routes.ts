@@ -403,6 +403,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             observation,
             account_id,
             category_id,
+            is_recurring,
             categories (id, name),
             accounts (id, name, type)
           `);
@@ -435,6 +436,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
               observation,
               account_id,
               category_id,
+              is_recurring,
               categories (id, name)
             `);
 
