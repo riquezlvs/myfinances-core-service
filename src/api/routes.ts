@@ -568,6 +568,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         categoryId: body.categoryId || body.category_id,
         incomeType: body.incomeType || body.income_type,
         paymentMethod: body.paymentMethod || body.payment_method,
+        isRecurring: body.isRecurring !== undefined ? Boolean(body.isRecurring) : (body.is_recurring !== undefined ? Boolean(body.is_recurring) : undefined),
+        dayOfMonth: body.dayOfMonth || body.day_of_month,
+        weekendRule: body.weekendRule || body.weekend_rule,
       }, requestId);
 
       sendJson(res, 201, {

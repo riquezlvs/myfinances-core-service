@@ -855,6 +855,7 @@ export async function registrarEntrada(
     account_id?: string | null;
     category_id?: number;
     occurred_at?: string;
+    is_recurring?: boolean;
   },
   rawInput: string,
   requestId: string
@@ -891,6 +892,7 @@ export async function registrarEntrada(
         raw_input: rawInput,
         entry_type: 'income',
         account_id: accountId,
+        is_recurring: dados.is_recurring ?? false,
       })
       .select('display_id')
       .single();

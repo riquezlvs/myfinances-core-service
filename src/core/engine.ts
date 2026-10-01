@@ -18,6 +18,7 @@ import { calcularSafeToSpend, listarContas } from '../services/accounts/accountS
 import { listarMetas } from '../services/budgets/budgetService';
 import { obterResumoPatrimonio } from '../services/patrimony/patrimonyService';
 import { listarMetasPoupanca } from '../services/savings/savingsService';
+import { cadastrarNovaRecorrencia } from '../services/recurring/recurringService';
 import { formatarReal, formatarMetodo, formatarDataCurta } from '../utils/formatters';
 import { extrairNomeEValorDeFrase } from '../utils/textParsers';
 import { getSupabaseClient } from '../clients/supabaseClient';
@@ -209,7 +210,7 @@ async function executarNovoGasto(
 
 /** Executa o registro de uma entrada financeira */
 async function executarNovaEntrada(
-  transaction: ParsedTransaction,
+  transaction: ParsedTransaction & { is_recurring?: boolean; account_id?: string | null },
   rawInput: string,
   requestId: string,
   avisos: string[] = []
@@ -219,7 +220,9 @@ async function executarNovaEntrada(
       description: transaction.description,
       total_amount: transaction.total_amount,
       account_name: transaction.account_name ?? null,
+      account_id: transaction.account_id ?? null,
       occurred_at: transaction.occurred_at,
+      is_recurring: transaction.is_recurring ?? false,
     },
     rawInput,
     requestId
@@ -632,28 +635,66 @@ export async function confirmarTransacaoUnificado(
     paymentMethod?: string;
     cardId?: string | null;
     accountName?: string | null;
+    accountId?: string | null;
     occurredAt?: string;
     rawInput?: string;
     installmentTotal?: number | null;
+    isRecurring?: boolean;
+    dayOfMonth?: number;
+    incomeType?: 'salary' | 'freelance' | 'benefit' | 'other' | null;
+    weekendRule?: 'anticipate' | 'postpone' | 'exact';
   },
   requestId: string
 ): Promise<EngineOutput> {
   const isIncome = dados.entryType === 'income';
 
   if (isIncome) {
-    return await executarNovaEntrada(
+    let recorrenciaInfo = '';
+    if (dados.isRecurring) {
+      try {
+        const diaNum =
+          Number(dados.dayOfMonth) ||
+          (dados.occurredAt ? new Date(dados.occurredAt).getDate() : 5);
+
+        await cadastrarNovaRecorrencia(
+          {
+            description: dados.description,
+            total_amount: Number(dados.totalAmount),
+            entry_type: 'income',
+            day_of_month: Math.min(31, Math.max(1, diaNum)),
+            income_type: (dados.incomeType as any) || 'salary',
+            weekend_rule: dados.weekendRule || 'anticipate',
+            account_id: dados.accountId || null,
+          },
+          requestId
+        );
+        recorrenciaInfo = ` (Programada como receita recorrente todo dia ${diaNum})`;
+      } catch (err: any) {
+        log('error', `[Engine] Falha ao cadastrar regra recorrente na confirmação: ${err.message}`, { requestId });
+      }
+    }
+
+    const res = await executarNovaEntrada(
       {
         description: dados.description,
         total_amount: Number(dados.totalAmount),
         account_name: dados.accountName ?? null,
+        account_id: dados.accountId ?? null,
         occurred_at: dados.occurredAt ?? new Date().toISOString(),
         category_id: dados.categoryId ?? 1,
         entry_type: 'income',
         payment_method: (dados.paymentMethod as any) || null,
+        is_recurring: Boolean(dados.isRecurring),
       },
       dados.rawInput || dados.description,
       requestId
     );
+
+    if (recorrenciaInfo && res.sucesso) {
+      res.mensagem += recorrenciaInfo;
+    }
+
+    return res;
   }
 
   return await executarNovoGasto(
