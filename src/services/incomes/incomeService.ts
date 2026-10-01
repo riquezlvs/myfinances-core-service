@@ -57,18 +57,22 @@ export async function registrarReceitaAvulsa(
     // 2. Resolve categoria padrão se não informada
     const categoryId = dados.categoryId ?? (await obterCategoriaPadrao(requestId, 'income'));
 
-    // 3. Insere na tabela transactions
+    // 3. Prepara descrição enriquecida com local/observação se fornecida
+    const descricaoFinal = dados.location && dados.location.trim() !== dados.description.trim()
+      ? `${dados.description.trim()} (${dados.location.trim()})`
+      : dados.description.trim();
+
+    // 4. Insere na tabela transactions (sem coluna location que não existe no schema)
     const { data, error } = await supabase
       .from('transactions')
       .insert({
-        description: dados.description,
+        description: descricaoFinal,
         total_amount: Math.abs(dados.amount),
         entry_type: 'income',
         occurred_at: dataOcorrencia.toISOString(),
         account_id: dados.accountId || null,
         payment_method: dados.paymentMethod || 'pix',
         category_id: categoryId,
-        location: dados.location || null,
         is_recurring: isRecurring,
       })
       .select('display_id, description, total_amount, occurred_at')

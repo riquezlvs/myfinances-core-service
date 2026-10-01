@@ -84,6 +84,7 @@ describe('Receitas Avulsas (Freelance / Terceiros / Extras)', () => {
       amount: 1500,
       accountId: 'acc-nubank',
       incomeType: 'freelance',
+      location: 'Remoto',
     }, 'req-test');
 
     expect(resultado.displayId).toBe(88);
@@ -91,6 +92,12 @@ describe('Receitas Avulsas (Freelance / Terceiros / Extras)', () => {
     expect(resultado.accountName).toBe('Nubank Conta');
     expect(resultado.novoSaldo).toBe(2000);
     expect(spyCreditar).toHaveBeenCalledWith('acc-nubank', 1500, 'req-test');
+
+    // Valida que o payload para 'transactions' não inclui a coluna inexistente 'location'
+    const payloadInserido = insertMock.mock.calls[0][0];
+    expect(payloadInserido).not.toHaveProperty('location');
+    expect(payloadInserido.description).toContain('Remoto');
+    expect(payloadInserido.category_id).toBeDefined();
 
     spyObterConta.mockRestore();
     spyCreditar.mockRestore();
