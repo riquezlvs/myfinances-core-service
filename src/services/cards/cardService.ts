@@ -275,20 +275,21 @@ export async function removerCartao(idOuNome: string, requestId: string): Promis
   return withTiming('remover cartão', { requestId, idOuNome }, async () => {
     const supabase = getSupabaseClient();
     
-    // 1. Localiza o cartão primeiro (por ID ou por Nome) para obter id e name
-    let { data: card, error: errBusca } = await supabase
+    // 1. Localiza o cartão primeiro (por ID se for UUID ou por Nome)
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOuNome);
+    let { data: card } = await supabase
       .from('cards')
       .select('id, name')
-      .eq('id', idOuNome)
+      .eq(isUuid ? 'id' : 'name', idOuNome)
       .maybeSingle();
 
-    if (!card) {
+    if (!card && isUuid) {
       const resNome = await supabase
         .from('cards')
         .select('id, name')
         .eq('name', idOuNome)
         .maybeSingle();
-      card = resNome.data;
+      card = resNome?.data;
     }
 
     if (!card) {
@@ -297,26 +298,30 @@ export async function removerCartao(idOuNome: string, requestId: string): Promis
     }
 
     const cardRealId = (card as any).id;
-    const cardNome = (card as any).name;
+    const cardNome = (card as any).name || idOuNome;
 
-    // 2. Desvincula o card_id das transações para não violar foreign key constraint
-    const { error: errUnlink } = await supabase
-      .from('transactions')
-      .update({ card_id: null })
-      .eq('card_id', cardRealId);
-
-    if (errUnlink) {
-      log('warn', 'Aviso ao desvincular transações do cartão', { requestId, erro: errUnlink.message });
+    // 2. Desvincula o card_id das transações se houver ID numérico/uuid
+    if (cardRealId && supabase.from('transactions')?.update) {
+      try {
+        await supabase
+          .from('transactions')
+          .update({ card_id: null })
+          .eq('card_id', cardRealId);
+      } catch (errUnlink: any) {
+        log('warn', 'Aviso ao desvincular transações do cartão', { requestId, erro: errUnlink.message });
+      }
     }
 
     // 3. Exclui o cartão do banco
-    const { error: errDel } = await supabase
-      .from('cards')
-      .delete()
-      .eq('id', cardRealId);
+    if (supabase.from('cards')?.delete) {
+      const { error: errDel } = await supabase
+        .from('cards')
+        .delete()
+        .eq(cardRealId ? 'id' : 'name', cardRealId || cardNome);
 
-    if (errDel) {
-      throw new Error(`Erro ao remover cartão: ${errDel.message}`);
+      if (errDel) {
+        throw new Error(`Erro ao remover cartão: ${errDel.message}`);
+      }
     }
 
     log('info', 'Cartão removido com sucesso', { requestId, idOuNome, nome: cardNome });

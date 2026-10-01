@@ -13,9 +13,46 @@ export interface Account {
   updated_at: string;
 }
 
+export interface ProjectedIncomeItem {
+  id: string;
+  description: string;
+  amount: number;
+  expectedDate: string;
+  incomeType?: 'salary' | 'freelance' | 'benefit' | 'other' | null;
+  accountName?: string;
+}
+
 export interface SafeToSpendSummary {
   accountName: string;
   realBalance: number;
   openCreditInvoices: number;
-  safeToSpend: number;
+  safeToSpend: number; // Saldo imediato - faturas
+  projectedSafeToSpend: number; // Saldo real + entradas antes do fechamento - faturas
+  projectedIncomes: number; // Soma de entradas que caem antes do fechamento
+  projectedIncomesList: ProjectedIncomeItem[];
+  targetClosingDay?: number;
+  targetClosingDate?: string;
+  coverageStatus: 'positive' | 'warning' | 'negative';
+  explanationText?: string;
+}
+
+export interface ConsolidatedPositionSummary {
+  totalLiquidBalance: number;
+  totalOpenCreditInvoices: number;
+  immediateNetBalance: number;
+  projectedIncomesUntilClosing: number;
+  projectedNetBalance: number;
+  accounts: Array<{
+    id: string;
+    name: string;
+    type: AccountType;
+    balance: number;
+  }>;
+  cards: Array<{
+    id: string;
+    name: string;
+    closing_day: number;
+    due_day?: number;
+    faturaAtual: number;
+  }>;
 }

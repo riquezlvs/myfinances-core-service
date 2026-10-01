@@ -282,18 +282,51 @@ export async function apagarParcelasPorEscopo(
 
     const { data: linha, error: erroBusca } = await supabase
       .from('transactions')
-      .select('display_id, installment_group_id, installment_number')
+      .select('display_id, installment_group_id, installment_number, description, occurred_at, third_party_share_amount')
       .eq('display_id', displayId)
       .maybeSingle();
 
     if (erroBusca) throw new Error(`Erro ao buscar transação ${displayId}: ${erroBusca.message}`);
     if (!linha) return { displayIds: [] };
 
-    // Se não faz parte de um grupo de parcelas, apaga apenas a própria linha
+    // Se não faz parte de um grupo de parcelas, apaga apenas a própria linha.
+    // Inclui fallback para splits legados sem installment_group_id: tenta apagar
+    // linhas de dívida órfãs que compartilhem a mesma data e descrição base.
     if (!linha.installment_group_id || escopo === 'apenas_esta') {
       const { error } = await supabase.from('transactions').delete().eq('display_id', displayId);
       if (error) throw new Error(`Erro ao apagar transação ${displayId}: ${error.message}`);
-      return { displayIds: [displayId] };
+      const apagados = [displayId];
+
+      // Fallback: limpa dívidas órfãs de splits legados (sem installment_group_id).
+      // Apaga linhas da mesma data cujo description termina em " (parte de <nome>)"
+      // e que tenham third_party_share_amount > 0, indicando que são dívidas do mesmo split.
+      if (!linha.installment_group_id && escopo !== 'apenas_esta' && linha.occurred_at) {
+        const diaBase = String(linha.occurred_at).slice(0, 10);
+        const descBase = String(linha.description ?? '').trim();
+
+        const { data: dividas, error: erroDividas } = await supabase
+          .from('transactions')
+          .select('display_id')
+          .gte('occurred_at', `${diaBase}T00:00:00`)
+          .lte('occurred_at', `${diaBase}T23:59:59`)
+          .gt('third_party_share_amount', 0)
+          .like('description', `${descBase} (parte de %`);
+
+        if (!erroDividas && dividas && dividas.length > 0) {
+          const ids = dividas.map((d) => d.display_id as number);
+          const { error: erroDiv } = await supabase.from('transactions').delete().in('display_id', ids);
+          if (!erroDiv) {
+            apagados.push(...ids);
+            log('info', 'Dívidas órfãs de split legado removidas junto com a transação principal', {
+              requestId,
+              displayId,
+              dividasRemovidas: ids,
+            });
+          }
+        }
+      }
+
+      return { displayIds: apagados };
     }
 
     let query = supabase

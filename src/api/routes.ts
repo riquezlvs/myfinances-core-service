@@ -26,7 +26,21 @@ import {
 } from '../services/investments/investmentService';
 import { listarPessoasComSaldos, cadastrarNovaPessoa } from '../services/people/peopleService';
 import { getSaldoTerceiros, registrarPagamentoNoBanco, processarPagamento, salvarDividida } from '../services/debts/debtService';
+import { obterPosicaoConsolidadaTitular } from '../services/accounts/accountService';
+import { registrarReceitaAvulsa } from '../services/incomes/incomeService';
+import {
+  listarTodasRecorrencias,
+  cadastrarNovaRecorrencia,
+  desativarRecorrenciaPorId,
+} from '../services/recurring/recurringService';
 
+
+import { MAX_IMAGE_FILE_SIZE_BYTES } from '../config/constants';
+import { interpretarExtrato } from '../services/gemini/statementParser';
+import { calcularSafeToSpend, listarContas } from '../services/accounts/accountService';
+import { getCategoryMap } from '../services/categories/categoryCache';
+import { listarCartoes } from '../services/cards/cardService';
+import { formatarMetodo } from '../utils/formatters';
 
 /**
  * Utilitário para adicionar cabeçalhos CORS a todas as respostas HTTP
@@ -38,15 +52,15 @@ function setCorsHeaders(res: ServerResponse) {
 }
 
 /**
- * Lê e parseia o corpo JSON de uma requisição HTTP
+ * Lê e parseia o corpo JSON de uma requisição HTTP (suporta até MAX_IMAGE_FILE_SIZE_BYTES para imagens)
  */
 async function parseJsonBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
-      // Prevenção contra payloads gigantes (> 1MB)
-      if (body.length > 1e6) {
+      // Prevenção contra payloads gigantes (> 15MB)
+      if (body.length > MAX_IMAGE_FILE_SIZE_BYTES) {
         req.socket.destroy();
         reject(new Error('Payload muito grande'));
       }
@@ -141,6 +155,139 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     }
   }
 
+  // Rota: POST /api/chat/image-preview (Preview multimodal de imagem / extrato / comprovante)
+  if ((url === '/api/chat/image-preview' || url === '/api/transacoes/imagem') && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      let imageBase64: string = body?.imageBase64 || body?.image || body?.base64;
+      const mimeType: string = body?.mimeType || 'image/jpeg';
+      const legenda: string | undefined = body?.caption || body?.legenda || undefined;
+
+      if (!imageBase64 || typeof imageBase64 !== 'string') {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'O campo "imageBase64" é obrigatório.',
+        });
+        return true;
+      }
+
+      // Remove prefixo data:image/...;base64, se presente
+      if (imageBase64.includes(';base64,')) {
+        imageBase64 = imageBase64.split(';base64,')[1]!;
+      }
+
+      const buffer = Buffer.from(imageBase64, 'base64');
+      const extrato = await interpretarExtrato(buffer, mimeType, requestId, legenda);
+
+      if (!extrato.items.length) {
+        sendJson(res, 422, {
+          sucesso: false,
+          tipo: 'mensagem',
+          mensagem: 'Não foi possível identificar nenhuma despesa ou comprovante nítido nesta imagem.',
+        });
+        return true;
+      }
+
+      const [categoryMap, safeSummary, contas, cartoes] = await Promise.all([
+        getCategoryMap(requestId),
+        calcularSafeToSpend(undefined, requestId).catch(() => ({
+          accountName: 'Conta Principal',
+          realBalance: 0,
+          openCreditInvoices: 0,
+          safeToSpend: 0,
+        })),
+        listarContas(requestId).catch(() => []),
+        listarCartoes(requestId).catch(() => []),
+      ]);
+
+      // Tenta associar cartão pelo hint ou legenda
+      let cartaoEscolhido = cartoes.find((c) => c.card_type === 'credit' && c.is_default) || cartoes[0];
+      const textoParaBuscaCartao = `${legenda ?? ''} ${extrato.card_name_hint ?? ''}`.toLowerCase();
+      if (textoParaBuscaCartao.trim()) {
+        const match = cartoes.find((c) => {
+          const nomeC = c.name.toLowerCase();
+          return textoParaBuscaCartao.includes(nomeC) || (extrato.card_name_hint && nomeC.includes(extrato.card_name_hint.toLowerCase()));
+        });
+        if (match) {
+          cartaoEscolhido = match;
+        }
+      }
+
+      const saldoLivreAtual = safeSummary.safeToSpend;
+      const primeiroItem = extrato.items[0]!;
+      const valor = primeiroItem.amount;
+      const novoSaldoLivreProjetado = saldoLivreAtual - valor;
+      const impactoPercentual = saldoLivreAtual > 0 ? Number(((valor / saldoLivreAtual) * 100).toFixed(2)) : 0;
+      const categoriaNome = categoryMap[primeiroItem.category_id] ?? 'Outros';
+
+      let descricaoFinal = primeiroItem.description;
+      if (legenda && extrato.items.length === 1) {
+        descricaoFinal = legenda;
+      }
+
+      const previewData = {
+        originalInput: legenda || `Comprovante: ${extrato.card_name_hint || descricaoFinal}`,
+        isAudio: false,
+        origin: 'image',
+        precision: '99.2% (IA Visão)',
+        entryType: 'expense' as const,
+        description: descricaoFinal,
+        totalAmount: valor,
+        categoryId: primeiroItem.category_id,
+        categoryName: categoriaNome,
+        paymentMethod: cartaoEscolhido ? 'credit_card' : 'debit_card',
+        paymentMethodLabel: cartaoEscolhido ? `Cartão • ${cartaoEscolhido.name}` : 'Débito',
+        cardName: cartaoEscolhido?.name || extrato.card_name_hint || null,
+        accountName: safeSummary.accountName,
+        accountBalance: safeSummary.realBalance,
+        occurredAt: primeiroItem.date.includes('T') ? primeiroItem.date : `${primeiroItem.date}T12:00:00-03:00`,
+        location: descricaoFinal,
+        safeToSpend: {
+          current: saldoLivreAtual,
+          projected: novoSaldoLivreProjetado,
+          impactPercentage: impactoPercentual,
+          impactLabel: `-${impactoPercentual}%`,
+          progressBarPercent: Math.max(10, Math.min(100, Math.round((novoSaldoLivreProjetado / (saldoLivreAtual || 1)) * 100))),
+        },
+        availableCategories: Object.entries(categoryMap).map(([id, name]) => ({
+          id: Number(id),
+          name,
+        })),
+        availableAccounts: contas.map((c) => ({
+          id: c.id,
+          name: c.name,
+          balance: Number(c.balance),
+        })),
+      };
+
+      const todosItens = extrato.items.map((it) => ({
+        description: it.description,
+        totalAmount: it.amount,
+        categoryId: it.category_id,
+        categoryName: categoryMap[it.category_id] ?? 'Outros',
+        occurredAt: it.date,
+        installmentNumber: it.installment_current,
+        installmentTotal: it.installment_total,
+      }));
+
+      sendJson(res, 200, {
+        sucesso: true,
+        tipo: 'gasto',
+        mensagem: 'Imagem analisada com sucesso pelo Guará IA.',
+        dados: previewData,
+        multiplos: extrato.items.length > 1 ? todosItens : undefined,
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao interpretar imagem de extrato/comprovante', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao processar imagem.',
+      });
+      return true;
+    }
+  }
+
   // Rota: POST /api/chat
   if (url === '/api/chat' && method === 'POST') {
     try {
@@ -191,7 +338,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   // Rota: GET /api/dashboard
   if (url === '/api/dashboard' && method === 'GET') {
     try {
-      const [resumo, saldo, gastos, patrimonio, poupanca, graficos] = await Promise.all([
+      const [resumo, saldo, gastos, patrimonio, poupanca, graficos, consolidado] = await Promise.all([
         obterResumoUnificado(requestId),
         obterSaldoUnificado(requestId),
         obterUltimosGastosUnificado(10, requestId),
@@ -201,6 +348,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
           log('warn', 'Erro ao obter dados gráficos do dashboard', { erro: err.message });
           return null;
         }),
+        obterPosicaoConsolidadaTitular(requestId).catch(() => null),
       ]);
 
       sendJson(res, 200, {
@@ -212,6 +360,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
           patrimonio: patrimonio?.dados || null,
           poupanca: poupanca?.dados?.metas || [],
           graficos: graficos || null,
+          consolidado: consolidado || null,
         },
       });
       return true;
@@ -375,6 +524,164 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 500, {
         sucesso: false,
         mensagem: err.message || 'Erro ao carregar contas.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: GET /api/accounts/summary (Posição consolidada da pessoa: contas + faturas)
+  if (url === '/api/accounts/summary' && method === 'GET') {
+    try {
+      const summary = await obterPosicaoConsolidadaTitular(requestId);
+      sendJson(res, 200, {
+        sucesso: true,
+        dados: summary,
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao obter sumário consolidado de contas', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: 'Erro ao obter sumário consolidado de contas.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/incomes (Cadastro direto de receitas avulsas: freela, terceiros, extras)
+  if (url === '/api/incomes' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      if (!body?.description || body?.amount === undefined) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'Descrição e valor são obrigatórios.',
+        });
+        return true;
+      }
+
+      const resultado = await registrarReceitaAvulsa({
+        description: body.description,
+        amount: Number(body.amount),
+        accountId: body.accountId || body.account_id,
+        occurredAt: body.occurredAt || body.occurred_at,
+        categoryId: body.categoryId || body.category_id,
+        incomeType: body.incomeType || body.income_type,
+        paymentMethod: body.paymentMethod || body.payment_method,
+      }, requestId);
+
+      sendJson(res, 201, {
+        sucesso: true,
+        dados: resultado,
+        mensagem: 'Receita cadastrada com sucesso!',
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao cadastrar receita avulsa', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao registrar receita.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: GET /api/recurring (Lista despesas fixas ou receitas recorrentes)
+  if (url.startsWith('/api/recurring') && method === 'GET') {
+    try {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const typeParam = parsedUrl.searchParams.get('type') as 'expense' | 'income' | null;
+      const recorrencias = await listarTodasRecorrencias(typeParam || undefined, requestId);
+      sendJson(res, 200, {
+        sucesso: true,
+        dados: recorrencias,
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao listar recorrências', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: 'Erro ao listar recorrências.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/recurring (Cadastra nova recorrência)
+  if (url === '/api/recurring' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      if (!body?.description || body?.total_amount === undefined || !body?.day_of_month) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'Descrição, valor e dia do mês são obrigatórios.',
+        });
+        return true;
+      }
+
+      const rec = await cadastrarNovaRecorrencia({
+        description: body.description,
+        total_amount: Number(body.total_amount),
+        day_of_month: Number(body.day_of_month),
+        entry_type: body.entry_type || 'expense',
+        payment_method: body.payment_method,
+        category_id: body.category_id,
+        account_id: body.account_id,
+        income_type: body.income_type,
+        weekend_rule: body.weekend_rule,
+      }, requestId);
+
+      sendJson(res, 201, {
+        sucesso: true,
+        dados: rec,
+        mensagem: 'Recorrência cadastrada com sucesso!',
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao cadastrar recorrência', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao cadastrar recorrência.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: DELETE /api/recurring ou POST /api/recurring/remover
+  if (
+    (url === '/api/recurring/remover' && method === 'POST') ||
+    (url.startsWith('/api/recurring') && method === 'DELETE')
+  ) {
+    try {
+      const parsedUrl = new URL(url, 'http://localhost');
+      let id = parsedUrl.searchParams.get('id');
+      if (!id && method === 'POST') {
+        const body = await parseJsonBody(req);
+        id = body?.id;
+      }
+      if (!id && url.startsWith('/api/recurring/')) {
+        id = url.split('/api/recurring/')[1]?.split('?')[0];
+      }
+
+      if (!id) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'ID da recorrência é obrigatório.',
+        });
+        return true;
+      }
+
+      await desativarRecorrenciaPorId(id, requestId);
+      sendJson(res, 200, {
+        sucesso: true,
+        mensagem: 'Recorrência desativada com sucesso.',
+      });
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao remover recorrência', { requestId, erro: err.message });
+      sendJson(res, 500, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao desativar recorrência.',
       });
       return true;
     }

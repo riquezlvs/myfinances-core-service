@@ -5,6 +5,9 @@ import { messageHandler } from '../../src/bot/handlers/messageHandler';
 import type { IntentPayload, ParsedTransaction } from '../../src/types/transaction';
 
 // Mocks dos serviços externos usados pelo messageHandler.
+vi.mock('../../src/core/engine', () => ({
+  processarTextoEntrada: vi.fn().mockResolvedValue({ sucesso: false }),
+}));
 vi.mock('../../src/services/gemini/intentRouter', () => ({
   classificarIntencao: vi.fn(),
 }));

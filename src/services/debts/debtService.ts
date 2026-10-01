@@ -4,6 +4,7 @@ import { buscarPessoaId, listarOuCriarPessoas } from '../people/peopleService';
 import { formatarReal } from '../../utils/formatters';
 import type { SaldoTerceiro, ResultadoPagamento } from '../../types/transaction';
 import { intervaloDoMes, mesAnoAtual } from '../../utils/month';
+import { randomUUID } from 'crypto';
 
 /** Resultado do split de contas: transação + linhas de dívida criadas. */
 export interface ResultadoSplit {
@@ -213,6 +214,11 @@ export async function salvarDividida(params: {
     const minhaParte = Math.round((total / n) * 100) / 100;
     const parteCadaOutro = Math.round((total - minhaParte) / pessoas.length * 100) / 100;
 
+    // UUID compartilhado entre a transação principal e todas as linhas de dívida.
+    // Isso permite que apagarTransacaoComGrupo remova o conjunto inteiro quando
+    // o usuário descarta o lançamento do extrato.
+    const grupoSplit = randomUUID();
+
     // Registra a transação principal (com third_party_share_amount = total - minhaParte).
     const { data: transacao, error: erroTransacao } = await supabase
       .from('transactions')
@@ -224,6 +230,7 @@ export async function salvarDividida(params: {
         occurred_at: ocorreuEm,
         my_share_amount: minhaParte,
         third_party_share_amount: total - minhaParte,
+        installment_group_id: grupoSplit,
       })
       .select('id')
       .single();
@@ -251,6 +258,7 @@ export async function salvarDividida(params: {
           my_share_amount: parteCadaOutro,
           third_party_id: pessoaId,
           third_party_share_amount: parteCadaOutro,
+          installment_group_id: grupoSplit,
         });
 
       if (erroDivida) throw new Error(`Erro ao registrar dívida de ${nomeOriginal}: ${erroDivida.message}`);

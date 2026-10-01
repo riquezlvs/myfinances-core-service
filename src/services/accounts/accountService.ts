@@ -1,8 +1,9 @@
 import { getSupabaseClient } from '../../clients/supabaseClient';
 import { withTiming, log } from '../../utils/logger';
-import type { Account, AccountType, SafeToSpendSummary } from '../../types/account';
+import type { Account, AccountType, SafeToSpendSummary, ConsolidatedPositionSummary, ProjectedIncomeItem } from '../../types/account';
 import type { PaymentMethod } from '../../types/transaction';
 import { listarCartoes, calcularPeriodoFatura, getFaturaDoPeriodo } from '../cards/cardService';
+import { obterRendasPrevistasNoPeriodo } from '../recurring/recurringService';
 
 /**
  * Lista todas as contas ativas do usuário.
@@ -156,8 +157,9 @@ export async function debitarSaldo(accountId: string, valor: number, requestId: 
 }
 
 /**
- * Calcula o Safe-to-Spend (Saldo Real vs Saldo Livre).
- * Saldo Livre = Saldo da Conta Corrente Principal - Total das Faturas Abertas no Crédito.
+ * Calcula o Safe-to-Spend dinâmico e projetado até o fechamento da fatura.
+ * Resolve o problema de aparecer negativado quando a pessoa tem entradas certas
+ * (como salário ou freela) antes do dia do fechamento do cartão.
  */
 export async function calcularSafeToSpend(
   contaNomeOuId?: string,
@@ -182,23 +184,176 @@ export async function calcularSafeToSpend(
 
     let totalFaturasAbertas = 0;
     const primeiroCreditoId = cartoesCredito[0]?.id;
+    let targetClosingDay = cartoesCredito[0]?.closing_day ?? 25;
+    let targetClosingDateObj: Date = new Date();
+
+    const hoje = new Date();
+
+    // Encontra o próximo fechamento relevante
+    let menorDistanciaDias = Infinity;
 
     for (const c of cartoesCredito) {
-      const periodo = calcularPeriodoFatura(c.closing_day);
+      const periodo = calcularPeriodoFatura(c.closing_day, hoje);
       const incluirSemCartao = c.id === primeiroCreditoId;
       const itens = await getFaturaDoPeriodo(c.id, periodo, incluirSemCartao, requestId);
       const totalCartao = itens.reduce((s, i) => s + Number(i.total_amount), 0);
       totalFaturasAbertas += totalCartao;
+
+      // Calcula dias até o fechamento
+      const diffMs = periodo.fechamento.getTime() - hoje.getTime();
+      const diffDias = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+      if (diffDias >= 0 && diffDias < menorDistanciaDias) {
+        menorDistanciaDias = diffDias;
+        targetClosingDay = c.closing_day;
+        targetClosingDateObj = periodo.fechamento;
+      }
     }
 
     totalFaturasAbertas = Math.round(totalFaturasAbertas * 100) / 100;
     const safeToSpend = Math.round((realBalance - totalFaturasAbertas) * 100) / 100;
+
+    // Busca entradas certas e recorrentes programadas entre HOJE e a data de fechamento da fatura
+    let projectedIncomes = 0;
+    const projectedIncomesList: ProjectedIncomeItem[] = [];
+
+    try {
+      const rendasNoPeriodo = await obterRendasPrevistasNoPeriodo(hoje, targetClosingDateObj, requestId);
+      for (const r of rendasNoPeriodo) {
+        projectedIncomes += r.amount;
+        projectedIncomesList.push({
+          id: r.id,
+          description: r.description,
+          amount: r.amount,
+          expectedDate: r.dataEfetivaFormatada,
+          incomeType: r.income_type,
+        });
+      }
+
+      // Também busca transações avulsas agendadas (entry_type = 'income' com data futura até o fechamento)
+      const { data: transacoesFuturas } = await getSupabaseClient()
+        .from('transactions')
+        .select('id, description, total_amount, occurred_at')
+        .eq('entry_type', 'income')
+        .gt('occurred_at', hoje.toISOString())
+        .lte('occurred_at', targetClosingDateObj.toISOString());
+
+      if (transacoesFuturas && transacoesFuturas.length > 0) {
+        for (const tf of transacoesFuturas) {
+          const val = Number(tf.total_amount);
+          projectedIncomes += val;
+          projectedIncomesList.push({
+            id: tf.id,
+            description: tf.description,
+            amount: val,
+            expectedDate: String(tf.occurred_at).slice(0, 10),
+            incomeType: 'freelance',
+          });
+        }
+      }
+    } catch (errPrev: any) {
+      log('warn', 'Aviso ao calcular rendas previstas para o fechamento', { requestId, erro: errPrev.message });
+    }
+
+    projectedIncomes = Math.round(projectedIncomes * 100) / 100;
+    // O Saldo Projetado no Fechamento = Saldo Real Atual + Entradas Previstas antes do Fechamento - Faturas
+    const projectedSafeToSpend = Math.round((realBalance + projectedIncomes - totalFaturasAbertas) * 100) / 100;
+
+    const coverageStatus: 'positive' | 'warning' | 'negative' =
+      projectedSafeToSpend > 0 ? 'positive' : projectedSafeToSpend === 0 ? 'warning' : 'negative';
+
+    const targetDateFormatted = `${String(targetClosingDateObj.getDate()).padStart(2, '0')}/${String(
+      targetClosingDateObj.getMonth() + 1
+    ).padStart(2, '0')}`;
+
+    const explanationText =
+      projectedIncomes > 0
+        ? `R$ ${realBalance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} em conta + R$ ${projectedIncomes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} a receber antes do fechamento (dia ${targetClosingDay}) - R$ ${totalFaturasAbertas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de faturas = R$ ${projectedSafeToSpend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} projetado livre.`
+        : undefined;
 
     return {
       accountName,
       realBalance,
       openCreditInvoices: totalFaturasAbertas,
       safeToSpend,
+      projectedSafeToSpend,
+      projectedIncomes,
+      projectedIncomesList,
+      targetClosingDay,
+      targetClosingDate: targetDateFormatted,
+      coverageStatus,
+      explanationText,
+    };
+  });
+}
+
+/**
+ * Posição consolidada do titular:
+ * Unifica todas as contas de liquidez (checking) e todas as faturas abertas de cartões,
+ * demonstrando que é a mesma pessoa e a mesma responsabilidade financeira.
+ */
+export async function obterPosicaoConsolidadaTitular(
+  requestId: string = 'posicao-consolidada'
+): Promise<ConsolidatedPositionSummary> {
+  return withTiming('obter posicao consolidada titular', { requestId }, async () => {
+    const contas = await listarContas(requestId);
+    const contasLiquidas = contas.filter((c) => c.type === 'checking');
+    const totalLiquidBalance = contasLiquidas.reduce((s, c) => s + Number(c.balance), 0);
+
+    const cartoes = await listarCartoes(requestId);
+    const cartoesCredito = cartoes.filter((c) => c.card_type === 'credit');
+
+    let totalOpenCreditInvoices = 0;
+    const cardsDetalhados: Array<{
+      id: string;
+      name: string;
+      closing_day: number;
+      due_day?: number;
+      faturaAtual: number;
+    }> = [];
+
+    const hoje = new Date();
+    let maxFechamento = hoje;
+
+    for (const c of cartoesCredito) {
+      const periodo = calcularPeriodoFatura(c.closing_day, hoje);
+      if (periodo.fechamento > maxFechamento) {
+        maxFechamento = periodo.fechamento;
+      }
+      const itens = await getFaturaDoPeriodo(c.id, periodo, false, requestId);
+      const faturaAtual = Math.round(itens.reduce((s, i) => s + Number(i.total_amount), 0) * 100) / 100;
+      totalOpenCreditInvoices += faturaAtual;
+
+      cardsDetalhados.push({
+        id: c.id,
+        name: c.name,
+        closing_day: c.closing_day,
+        due_day: c.due_day ?? undefined,
+        faturaAtual,
+      });
+    }
+
+    let projectedIncomesUntilClosing = 0;
+    try {
+      const rendas = await obterRendasPrevistasNoPeriodo(hoje, maxFechamento, requestId);
+      projectedIncomesUntilClosing = rendas.reduce((s, r) => s + r.amount, 0);
+    } catch {}
+
+    const immediateNetBalance = Math.round((totalLiquidBalance - totalOpenCreditInvoices) * 100) / 100;
+    const projectedNetBalance = Math.round((totalLiquidBalance + projectedIncomesUntilClosing - totalOpenCreditInvoices) * 100) / 100;
+
+    return {
+      totalLiquidBalance: Math.round(totalLiquidBalance * 100) / 100,
+      totalOpenCreditInvoices: Math.round(totalOpenCreditInvoices * 100) / 100,
+      immediateNetBalance,
+      projectedIncomesUntilClosing: Math.round(projectedIncomesUntilClosing * 100) / 100,
+      projectedNetBalance,
+      accounts: contasLiquidas.map((c) => ({
+        id: c.id,
+        name: c.name,
+        type: c.type,
+        balance: Number(c.balance),
+      })),
+      cards: cardsDetalhados,
     };
   });
 }

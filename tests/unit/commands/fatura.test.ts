@@ -107,6 +107,12 @@ describe('fatura — filtrarRecorrenciasPrevistas', () => {
 describe('fatura — handleFatura', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-15T12:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('exibe lançamentos realizados e recorrências previstas com totais separados', async () => {
