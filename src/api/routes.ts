@@ -91,7 +91,9 @@ function sendJson(res: ServerResponse, statusCode: number, data: any) {
  */
 export async function handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const method = req.method ?? 'GET';
-  const url = req.url ?? '/';
+  const rawUrl = req.url ?? '/';
+  const parsedUrl = new URL(rawUrl, 'http://localhost');
+  const url = parsedUrl.pathname.replace(/\/+$/, '') || '/';
   const requestId = randomUUID();
 
   // Tratamento de CORS Preflight
@@ -374,18 +376,25 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     }
   }
 
-  // Rota: GET /api/extrato
+  // Rota: GET /api/extrato ou /api/extrato/:id
   if (url.startsWith('/api/extrato') && method === 'GET') {
     try {
-      const parsedUrl = new URL(url, 'http://localhost');
       const mesAno = parsedUrl.searchParams.get('mes') || parsedUrl.searchParams.get('mesAno') || undefined;
-      const idParam = parsedUrl.searchParams.get('id') || undefined;
+      let idParam = parsedUrl.searchParams.get('id') || undefined;
+
+      if (!idParam && url.startsWith('/api/extrato/')) {
+        const pathPart = url.replace('/api/extrato/', '').trim();
+        if (pathPart) {
+          idParam = decodeURIComponent(pathPart);
+        }
+      }
 
       if (idParam) {
         const supabase = getSupabaseClient();
         const numericId = parseInt(idParam, 10);
         let txData: any = null;
 
+        // 1. Tenta buscar com observation e relação accounts!account_id
         let queryWithRel = supabase
           .from('transactions')
           .select(`
@@ -405,7 +414,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             category_id,
             is_recurring,
             categories (id, name),
-            accounts (id, name, type)
+            accounts!account_id (id, name, type)
           `);
 
         if (!isNaN(numericId) && String(numericId) === idParam.trim()) {
@@ -419,7 +428,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         if (!errRel && dataWithRelations) {
           txData = dataWithRelations;
         } else {
-          let simpleQuery = supabase
+          // 2. Se falhar (ex: coluna observation ainda não existe no DB), tenta sem observation
+          let queryWithoutObs = supabase
             .from('transactions')
             .select(`
               id,
@@ -433,21 +443,56 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
               installment_number,
               installment_total,
               installment_group_id,
-              observation,
               account_id,
               category_id,
               is_recurring,
-              categories (id, name)
+              categories (id, name),
+              accounts!account_id (id, name, type)
             `);
 
           if (!isNaN(numericId) && String(numericId) === idParam.trim()) {
-            simpleQuery = simpleQuery.eq('display_id', numericId);
+            queryWithoutObs = queryWithoutObs.eq('display_id', numericId);
           } else {
-            simpleQuery = simpleQuery.eq('id', idParam.trim());
+            queryWithoutObs = queryWithoutObs.eq('id', idParam.trim());
           }
 
-          const { data: simpleData } = await simpleQuery.maybeSingle();
-          txData = simpleData;
+          const { data: dataWithoutObs, error: errWithoutObs } = await queryWithoutObs.maybeSingle();
+
+          if (!errWithoutObs && dataWithoutObs) {
+            txData = { ...dataWithoutObs, observation: null };
+          } else {
+            // 3. Fallback simples sem relacionamento com accounts
+            let simpleQuery = supabase
+              .from('transactions')
+              .select(`
+                id,
+                display_id,
+                description,
+                total_amount,
+                occurred_at,
+                payment_method,
+                entry_type,
+                raw_input,
+                installment_number,
+                installment_total,
+                installment_group_id,
+                account_id,
+                category_id,
+                is_recurring,
+                categories (id, name)
+              `);
+
+            if (!isNaN(numericId) && String(numericId) === idParam.trim()) {
+              simpleQuery = simpleQuery.eq('display_id', numericId);
+            } else {
+              simpleQuery = simpleQuery.eq('id', idParam.trim());
+            }
+
+            const { data: simpleData } = await simpleQuery.maybeSingle();
+            if (simpleData) {
+              txData = { ...simpleData, observation: null };
+            }
+          }
         }
 
         sendJson(res, 200, {
@@ -594,7 +639,6 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   // Rota: GET /api/recurring (Lista despesas fixas ou receitas recorrentes)
   if (url.startsWith('/api/recurring') && method === 'GET') {
     try {
-      const parsedUrl = new URL(url, 'http://localhost');
       const typeParam = parsedUrl.searchParams.get('type') as 'expense' | 'income' | null;
       const recorrencias = await listarTodasRecorrencias(typeParam || undefined, requestId);
       sendJson(res, 200, {
@@ -658,7 +702,6 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     (url.startsWith('/api/recurring') && method === 'DELETE')
   ) {
     try {
-      const parsedUrl = new URL(url, 'http://localhost');
       let id = parsedUrl.searchParams.get('id');
       if (!id && method === 'POST') {
         const body = await parseJsonBody(req);
@@ -698,7 +741,6 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     (url.startsWith('/api/transactions') && method === 'DELETE')
   ) {
     try {
-      const parsedUrl = new URL(url, 'http://localhost');
       let displayId = parsedUrl.searchParams.get('display_id') || parsedUrl.searchParams.get('id');
 
       if (!displayId && method === 'POST') {
@@ -739,7 +781,6 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   ) {
     try {
       const body = await parseJsonBody(req);
-      const parsedUrl = new URL(url, 'http://localhost');
       const displayId = body?.display_id || body?.id || parsedUrl.searchParams.get('display_id') || parsedUrl.searchParams.get('id');
 
       const numId = parseInt(String(displayId), 10);
@@ -762,7 +803,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       if (body.observation !== undefined) updatePayload.observation = body.observation;
       if (body.category_id !== undefined) updatePayload.category_id = Number(body.category_id);
 
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('transactions')
         .update(updatePayload)
         .eq('display_id', numId)
@@ -777,6 +818,27 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
           categories (id, name)
         `)
         .maybeSingle();
+
+      if (error && (error.message?.includes('observation') || error.code === '42703')) {
+        const fallbackPayload = { ...updatePayload };
+        delete fallbackPayload.observation;
+        const fallbackRes = await supabase
+          .from('transactions')
+          .update(fallbackPayload)
+          .eq('display_id', numId)
+          .select(`
+            display_id,
+            description,
+            total_amount,
+            occurred_at,
+            payment_method,
+            entry_type,
+            categories (id, name)
+          `)
+          .maybeSingle();
+        data = fallbackRes.data ? { ...fallbackRes.data, observation: null } : null;
+        error = fallbackRes.error;
+      }
 
       if (error) throw error;
 
@@ -923,7 +985,6 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     (url.startsWith('/api/cards') && method === 'DELETE')
   ) {
     try {
-      const parsedUrl = new URL(url, 'http://localhost');
       let cardId = parsedUrl.searchParams.get('id') || parsedUrl.searchParams.get('name');
       
       if (!cardId && method === 'POST') {
@@ -953,6 +1014,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       });
       return true;
     }
+  }
+
   // Rota: POST /api/cards/pay-invoice ou /api/cartoes/pagar-fatura (Pagamento de fatura com saldo da conta)
   if (
     (url === '/api/cards/pay-invoice' || url === '/api/cartoes/pagar-fatura') &&
@@ -1141,7 +1204,6 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   // Rota: GET /api/investimentos/extrato (Extrato especializado em investimentos)
   if (url.startsWith('/api/investimentos/extrato') && method === 'GET') {
     try {
-      const parsedUrl = new URL(url, 'http://localhost');
       const mesAno = parsedUrl.searchParams.get('mes') || undefined;
       const tipo = parsedUrl.searchParams.get('tipo') || undefined;
       const busca = parsedUrl.searchParams.get('busca') || undefined;
@@ -1165,7 +1227,6 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   // Rota: GET /api/people (Lista pessoas no banco com seus saldos devedores)
   if (url.startsWith('/api/people') && method === 'GET') {
     try {
-      const parsedUrl = new URL(url, 'http://localhost');
       const busca = parsedUrl.searchParams.get('busca') || parsedUrl.searchParams.get('q') || undefined;
       const mesAno = parsedUrl.searchParams.get('mes') || parsedUrl.searchParams.get('mesAno') || undefined;
 

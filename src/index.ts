@@ -20,6 +20,17 @@ async function main(): Promise<void> {
     const tratouApi = await handleApiRequest(requisicao, resposta);
     if (tratouApi) return;
 
+    // Garante cabeçalhos CORS mesmo para rotas não mapeadas pela API
+    resposta.setHeader('Access-Control-Allow-Origin', '*');
+    resposta.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE, PUT');
+    resposta.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (metodo === 'OPTIONS') {
+      resposta.writeHead(204);
+      resposta.end();
+      return;
+    }
+
     if (metodo === 'GET' || metodo === 'HEAD') {
       resposta.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
       resposta.end(
@@ -30,8 +41,8 @@ async function main(): Promise<void> {
       return;
     }
 
-    resposta.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
-    resposta.end('Método não permitido.');
+    resposta.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+    resposta.end(JSON.stringify({ sucesso: false, mensagem: 'Método não permitido.' }));
   });
 
   await new Promise<void>((resolve, reject) => {

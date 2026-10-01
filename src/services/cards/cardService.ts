@@ -2,7 +2,7 @@ import { getSupabaseClient } from '../../clients/supabaseClient';
 import { withTiming, log } from '../../utils/logger';
 import { randomUUID } from 'crypto';
 import type { CardType } from '../../types/transaction';
-import { obterContaPorId, debitarSaldo } from '../accounts/accountService';
+import { obterContaPorId, obterContaPorNome, debitarSaldo } from '../accounts/accountService';
 
 /**
  * Fase 6 — Multi-cartão com data de fechamento personalizada.
@@ -701,19 +701,34 @@ export async function processarPagamentoFatura(
       throw new Error('O valor do pagamento deve ser maior que zero.');
     }
 
-    const { data: card, error: errCard } = await supabase
+    const isCardUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(dto.cardId);
+    let cardQuery = supabase
       .from('cards')
-      .select('id, name, closing_day, credit_limit, due_day')
-      .eq('id', dto.cardId)
-      .maybeSingle();
+      .select('id, name, closing_day, credit_limit, due_day');
 
-    if (errCard || !card) {
-      throw new Error(`Cartão com ID "${dto.cardId}" não encontrado.`);
+    if (isCardUuid) {
+      cardQuery = cardQuery.eq('id', dto.cardId);
+    } else {
+      cardQuery = cardQuery.ilike('name', dto.cardId.trim());
     }
 
-    const conta = await obterContaPorId(dto.accountId, requestId);
+    const { data: card, error: errCard } = await cardQuery.maybeSingle();
+
+    if (errCard || !card) {
+      throw new Error(`Cartão "${dto.cardId}" não encontrado.`);
+    }
+
+    const isAccountUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(dto.accountId);
+    let conta = isAccountUuid
+      ? await obterContaPorId(dto.accountId, requestId)
+      : await obterContaPorNome(dto.accountId, requestId);
+
+    if (!conta && !isAccountUuid) {
+      conta = await obterContaPorId(dto.accountId, requestId).catch(() => null);
+    }
+
     if (!conta) {
-      throw new Error(`Conta de origem com ID "${dto.accountId}" não encontrada.`);
+      throw new Error(`Conta de origem "${dto.accountId}" não encontrada.`);
     }
 
     const saldoAtualConta = Number(conta.balance || 0);
@@ -723,7 +738,7 @@ export async function processarPagamentoFatura(
       );
     }
 
-    const novoSaldoConta = await debitarSaldo(dto.accountId, amount, requestId);
+    const novoSaldoConta = await debitarSaldo(conta.id, amount, requestId);
     const paidAt = dto.paidAt || new Date().toISOString();
     const authCode = `GUA-${paidAt.slice(0, 10).replace(/-/g, '')}-${randomUUID().slice(0, 6).toUpperCase()}`;
 
