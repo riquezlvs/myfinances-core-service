@@ -14,7 +14,7 @@ import {
   confirmarTransacaoUnificado,
 } from '../core/engine';
 import { obterDadosGraficosDashboard, apagarTransacaoComGrupo } from '../services/transactions/transactionService';
-import { obterCartoesDetalhados, cadastrarNovoCartao, removerCartao } from '../services/cards/cardService';
+import { obterCartoesDetalhados, cadastrarNovoCartao, removerCartao, processarPagamentoFatura } from '../services/cards/cardService';
 import {
   obterDadosInvestimentosDashboard,
   cadastrarAtivoInvestimento,
@@ -950,6 +950,45 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 500, {
         sucesso: false,
         mensagem: err.message || 'Erro ao remover cartão.',
+      });
+      return true;
+    }
+  // Rota: POST /api/cards/pay-invoice ou /api/cartoes/pagar-fatura (Pagamento de fatura com saldo da conta)
+  if (
+    (url === '/api/cards/pay-invoice' || url === '/api/cartoes/pagar-fatura') &&
+    method === 'POST'
+  ) {
+    try {
+      const body = await parseJsonBody(req);
+      const cardId = body?.cardId || body?.card_id;
+      const accountId = body?.accountId || body?.account_id;
+      const amount = Number(body?.amount || body?.valor);
+
+      if (!cardId || !accountId || !amount || amount <= 0) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'Campos "cardId", "accountId" e "amount" (> 0) são obrigatórios.',
+        });
+        return true;
+      }
+
+      const resultado = await processarPagamentoFatura(
+        {
+          cardId: String(cardId),
+          accountId: String(accountId),
+          amount,
+          paidAt: body?.paidAt || body?.paid_at,
+        },
+        requestId
+      );
+
+      sendJson(res, 200, resultado);
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao processar pagamento de fatura', { requestId, erro: err.message });
+      sendJson(res, 400, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao processar pagamento de fatura.',
       });
       return true;
     }

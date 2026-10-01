@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   calcularPeriodoFatura,
+  gerarCiclosFatura,
   listarCartoes,
   definirCartao,
   getFaturaDoPeriodo,
@@ -234,5 +235,36 @@ describe('getFaturaDoPeriodo', () => {
     await expect(getFaturaDoPeriodo('c1', periodo, true, 'req-1')).rejects.toThrow(
       'Erro ao buscar fatura do cartão: boom'
     );
+  });
+});
+
+describe('gerarCiclosFatura (Multi-ciclos e próximas faturas)', () => {
+  it('quando hoje <= closing_day, gera ciclo atual aberto e faturas futuras', () => {
+    const agora = new Date(2026, 9, 10);
+    const ciclos = gerarCiclosFatura(25, 5, agora);
+
+    expect(ciclos.length).toBeGreaterThanOrEqual(4);
+    const cicloAtual = ciclos.find((c) => c.id === '2026-10');
+    expect(cicloAtual).toBeDefined();
+    expect(cicloAtual?.statusPadrao).toBe('aberta');
+    expect(cicloAtual?.rotulo).toBe('Outubro');
+
+    const cicloSeguinte = ciclos.find((c) => c.id === '2026-11');
+    expect(cicloSeguinte).toBeDefined();
+    expect(cicloSeguinte?.statusPadrao).toBe('futura');
+    expect(cicloSeguinte?.rotulo).toBe('Novembro');
+  });
+
+  it('quando hoje > closing_day, marca o ciclo que fechou como fechada e o próximo como aberta', () => {
+    const agora = new Date(2026, 9, 28);
+    const ciclos = gerarCiclosFatura(25, 5, agora);
+
+    const cicloOutubro = ciclos.find((c) => c.id === '2026-10');
+    expect(cicloOutubro).toBeDefined();
+    expect(cicloOutubro?.statusPadrao).toBe('fechada');
+
+    const cicloNovembro = ciclos.find((c) => c.id === '2026-11');
+    expect(cicloNovembro).toBeDefined();
+    expect(cicloNovembro?.statusPadrao).toBe('aberta');
   });
 });
