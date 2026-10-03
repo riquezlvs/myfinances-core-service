@@ -7,12 +7,21 @@ vi.mock('../../src/clients/supabaseClient', () => ({
   getSupabaseClient: () => ({ from: mockFrom }),
 }));
 
-function mockReq(url: string, method = 'GET'): IncomingMessage {
-  return {
-    url,
-    method,
-    headers: {},
-  } as unknown as IncomingMessage;
+import { Readable } from 'stream';
+
+function mockReq(url: string, method = 'GET', bodyObj?: any): IncomingMessage {
+  const stream = new Readable({
+    read() {
+      if (bodyObj !== undefined) {
+        this.push(JSON.stringify(bodyObj));
+      }
+      this.push(null);
+    },
+  });
+  (stream as any).url = url;
+  (stream as any).method = method;
+  (stream as any).headers = {};
+  return stream as unknown as IncomingMessage;
 }
 
 function mockRes(): { res: ServerResponse; getBody: () => any; getStatus: () => number } {
@@ -166,5 +175,60 @@ describe('API: GET /api/extrato com ID e Query Params', () => {
     expect(body.dados.itens).toHaveLength(1);
     expect(body.dados.itens[0].display_id).toBe(103);
     expect(body.dados.itens[0].observation).toBeNull();
+  });
+
+  it('deve atualizar lançamento com parcelamento e tags em /api/transactions/editar', async () => {
+    let capturedUpdate: any = null;
+    const updatedTx = {
+      display_id: 104,
+      description: 'Notebook (1/10)',
+      total_amount: 500,
+      entry_type: 'expense',
+      payment_method: 'credit_card',
+      installment_number: 1,
+      installment_total: 10,
+      tags: ['#Trabalho', '#Equipamento'],
+    };
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'transactions') {
+        return {
+          update: vi.fn().mockImplementation((payload: any) => {
+            capturedUpdate = payload;
+            return {
+              eq: vi.fn().mockReturnValue({
+                select: vi.fn().mockReturnValue({
+                  maybeSingle: vi.fn().mockResolvedValue({ data: updatedTx, error: null }),
+                }),
+              }),
+            };
+          }),
+        };
+      }
+      return { select: vi.fn().mockReturnThis() };
+    });
+
+    const payload = {
+      display_id: 104,
+      description: 'Notebook (1/10)',
+      total_amount: 500,
+      installment_number: 1,
+      installment_total: 10,
+      tags: ['#Trabalho', '#Equipamento'],
+    };
+    const req = mockReq('/api/transactions/editar', 'POST', payload);
+
+    const { res, getBody, getStatus } = mockRes();
+    const handled = await handleApiRequest(req, res);
+
+    expect(handled).toBe(true);
+    expect(getStatus()).toBe(200);
+    expect(capturedUpdate.installment_total).toBe(10);
+    expect(capturedUpdate.installment_number).toBe(1);
+    expect(capturedUpdate.tags).toEqual(['#Trabalho', '#Equipamento']);
+
+    const body = getBody();
+    expect(body.sucesso).toBe(true);
+    expect(body.dados.installment_total).toBe(10);
   });
 });

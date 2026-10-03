@@ -64,6 +64,14 @@ export async function obterDadosInvestimentosDashboard(requestId: string = 'dash
     ]);
 
     const contasAtivas = contas.filter((c) => c.is_active !== false);
+    const contasAtivasIds = new Set(contasAtivas.map((c) => c.id));
+
+    // Apenas ativos vinculados a contas ativas existentes
+    const ativosValidos = ativos.filter((a) => a.account_id && contasAtivasIds.has(a.account_id));
+
+    // Contas de corretora ativas (investment_broker)
+    const contasBroker = contasAtivas.filter((c) => c.type === 'investment_broker');
+    const saldoTotalBroker = contasBroker.reduce((acc, c) => acc + Number(c.balance || 0), 0);
 
     // Ativos de renda fixa reais
     const fixedTotal = patrimonio?.fixedIncome?.totalNet ??
@@ -73,20 +81,27 @@ export async function obterDadosInvestimentosDashboard(requestId: string = 'dash
     const liquidTotal = patrimonio?.liquidAssets?.total ??
       contasAtivas.filter((c) => c.type === 'checking').reduce((acc, c) => acc + Number(c.balance || 0), 0);
 
-    // Ativos de cripto reais
-    const criptoAtivos = ativos.filter((a) => a.asset_type === 'crypto');
+    // Ativos de cripto reais (apenas vinculados a contas ativas)
+    const criptoAtivos = ativosValidos.filter((a) => a.asset_type === 'crypto');
     const cryptoTotal = criptoAtivos.reduce((acc, a) => {
       const preco = a.current_price ?? a.average_price ?? 0;
       return acc + (Number(a.quantity) * Number(preco));
     }, 0);
 
-    // Ativos de renda variável reais (ações, FIIs, ETFs e outros menos cripto)
-    const variaveisAtivos = ativos.filter((a) => a.asset_type !== 'crypto');
-    const variableTotal = patrimonio?.variableIncome?.totalMarketValue ??
-      variaveisAtivos.reduce((acc, a) => {
-        const preco = a.current_price ?? a.average_price ?? 0;
-        return acc + (Number(a.quantity) * Number(preco));
-      }, 0);
+    // Ativos de renda variável reais (ações, FIIs, etc., vinculados a contas ativas)
+    const variaveisAtivos = ativosValidos.filter((a) => a.asset_type !== 'crypto');
+    const totalMercadoVariaveis = variaveisAtivos.reduce((acc, a) => {
+      const preco = a.current_price ?? a.average_price ?? 0;
+      return acc + (Number(a.quantity) * Number(preco));
+    }, 0);
+
+    // Se houver ativos negociáveis cadastrados sob contas ativas, usa seu valor de mercado.
+    // Se não houver ativos detalhados, mas houver saldo em contas do tipo 'investment_broker',
+    // usa o saldo real dessas contas de corretora!
+    // Se não houver nenhum dos dois, Renda Variável é estritamente 0 (sem fantasmas).
+    const variableTotal = totalMercadoVariaveis > 0
+      ? totalMercadoVariaveis
+      : saldoTotalBroker;
 
     const somaAtivos = fixedTotal + variableTotal + liquidTotal + cryptoTotal;
     const totalNetWorth = patrimonio?.totalNetWorth ?? (somaAtivos > 0 ? somaAtivos : 0);
@@ -342,7 +357,7 @@ export async function cadastrarAtivoInvestimento(payload: NovoAtivoPayload, requ
  * Ajusta o saldo de uma instituição/conta diretamente
  */
 export async function ajustarSaldoInstituicao(
-  payload: { accountId?: string; name?: string; novoSaldo: number },
+  payload: { accountId?: string; name?: string; novoSaldo: number; registrarTransacao?: boolean; motivo?: string },
   requestId: string = randomUUID()
 ) {
   const identificador = payload.accountId || payload.name;
@@ -350,7 +365,44 @@ export async function ajustarSaldoInstituicao(
     throw new Error('Identificador da conta (ID ou Nome) é obrigatório.');
   }
 
-  const contaAtualizada = await ajustarSaldo(identificador, Number(payload.novoSaldo), requestId);
+  const supabase = getSupabaseClient();
+  let saldoAnterior = 0;
+  try {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identificador);
+    let q = supabase.from('accounts').select('id, name, balance');
+    q = isUuid ? q.eq('id', identificador) : q.ilike('name', identificador);
+    const { data: cData } = await q.maybeSingle();
+    if (cData) {
+      saldoAnterior = Number(cData.balance || 0);
+    }
+  } catch (err) {
+    // Continua
+  }
+
+  const novoSaldoNum = Number(payload.novoSaldo);
+  const diferenca = Math.round((novoSaldoNum - saldoAnterior) * 100) / 100;
+  const contaAtualizada = await ajustarSaldo(identificador, novoSaldoNum, requestId);
+
+  // Se solicitado pelo usuário ou se houver delta de rendimento e flag ativa, gera registro no extrato
+  if (payload.registrarTransacao && diferenca !== 0 && contaAtualizada) {
+    const isRendimento = diferenca > 0;
+    const desc = payload.motivo || (isRendimento ? `Rendimento ${contaAtualizada.name}` : `Ajuste de Saldo ${contaAtualizada.name}`);
+    try {
+      await supabase.from('transactions').insert({
+        description: desc,
+        total_amount: Math.abs(diferenca),
+        gross_amount: Math.abs(diferenca),
+        entry_type: isRendimento ? 'yield' : 'expense',
+        payment_method: 'investment',
+        account_id: contaAtualizada.id,
+        occurred_at: new Date().toISOString(),
+        raw_input: `Ajuste de saldo: R$ ${saldoAnterior.toFixed(2)} -> R$ ${novoSaldoNum.toFixed(2)} em ${contaAtualizada.name}`,
+      });
+    } catch (txErr: any) {
+      log('warn', 'Erro ao gravar transação de ajuste de saldo', { erro: txErr.message });
+    }
+  }
+
   return {
     sucesso: true,
     mensagem: `Saldo de ${contaAtualizada.name} ajustado para R$ ${contaAtualizada.balance.toFixed(2)}.`,
@@ -477,106 +529,72 @@ export async function obterExtratoInvestimentos(
 
     const { data: rawTx, error } = await query;
     if (error) {
-      log('warn', 'Erro ao consultar transações de investimento, usando histórico modelado', { erro: error.message });
+      log('warn', 'Erro ao consultar transações de investimento', { erro: error.message, requestId });
     }
 
-    // Lista modelada base fiel ao mockup + enriquecida com transações reais
-    const mockFeed: ExtratoInvestimentoItem[] = [
-      {
-        id: 'tx-1',
-        ticker: 'Tesouro Selic 2029',
-        title: 'Tesouro Selic 2029',
-        type: 'Aporte',
-        time: '10:30',
-        institution: 'Nubank',
-        category: 'Renda Fixa',
-        detail: '1,5 títulos @ R$ 1.000,00',
-        amount: 1500.00,
-        status: 'Liquidado',
-        date: '2024-10-24T10:30:00Z',
-        monthGroup: 'Outubro 2024',
-      },
-      {
-        id: 'tx-2',
-        ticker: 'MXRF11',
-        title: 'MXRF11 - Maxi Renda',
-        type: 'Dividendo',
-        time: '09:15',
-        institution: 'XP Investimentos',
-        category: 'FIIs',
-        detail: 'R$ 0,09/cota • 1.383 cotas',
-        amount: 124.50,
-        status: 'Em conta',
-        date: '2024-10-18T09:15:00Z',
-        monthGroup: 'Outubro 2024',
-      },
-      {
-        id: 'tx-3',
-        ticker: 'BBAS3',
-        title: 'BBAS3 - Banco do Brasil',
-        type: 'Compra Ações',
-        time: '14:20',
-        institution: 'BTG Pactual',
-        category: 'Ações BR',
-        detail: '50 cotas @ R$ 28,00',
-        amount: 1400.00,
-        status: 'Executado',
-        date: '2024-10-10T14:20:00Z',
-        monthGroup: 'Outubro 2024',
-      },
-      {
-        id: 'tx-4',
-        ticker: 'PETR4',
-        title: 'PETR4 - Petrobras PN',
-        type: 'JCP',
-        time: '11:00',
-        institution: 'XP Investimentos',
-        category: 'Ações BR',
-        detail: 'Crédito líquido retido',
-        amount: 296.30,
-        status: 'Creditado',
-        date: '2024-09-27T11:00:00Z',
-        monthGroup: 'Setembro 2024',
-      },
-      {
-        id: 'tx-5',
-        ticker: 'BTC',
-        title: 'Bitcoin (BTC)',
-        type: 'Aporte',
-        time: '16:45',
-        institution: 'Binance',
-        category: 'Cripto',
-        detail: '0,00185 BTC • Carteira Fria',
-        amount: 600.00,
-        status: 'On-chain',
-        date: '2024-09-21T16:45:00Z',
-        monthGroup: 'Setembro 2024',
-      },
-    ];
-
-    // Se houver transações reais no banco, integra
     const itensReais: ExtratoInvestimentoItem[] = [];
     if (rawTx && rawTx.length > 0) {
       for (const t of rawTx) {
         const desc = t.description || '';
-        const isAporte = desc.toLowerCase().includes('aporte') || t.payment_method === 'investment';
-        const isRend = t.entry_type === 'yield' || desc.toLowerCase().includes('rendimento') || desc.toLowerCase().includes('dividendo');
+        const descLower = desc.toLowerCase();
+        const accountType = (t as any).accounts?.type;
+        const isInvestmentAccount = accountType === 'fixed_income' || accountType === 'investment_broker';
+        const isInvestmentMethod = t.payment_method === 'investment';
+        const isYield = t.entry_type === 'yield';
+        const hasKeyword =
+          descLower.includes('aporte') ||
+          descLower.includes('invest') ||
+          descLower.includes('dividendo') ||
+          descLower.includes('jcp') ||
+          descLower.includes('rendimento') ||
+          descLower.includes('resgate') ||
+          descLower.includes('cdb') ||
+          descLower.includes('tesouro') ||
+          descLower.includes('fii');
 
-        if (isAporte || isRend) {
+        // Se for transação de investimento ou associada a conta de investimento/rendimento
+        if (isInvestmentMethod || isYield || isInvestmentAccount || hasKeyword) {
           const dt = new Date(t.occurred_at);
           const mesNome = dt.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
           const groupTitle = mesNome.charAt(0).toUpperCase() + mesNome.slice(1);
           const hora = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
+          let tipoItem: ExtratoInvestimentoItem['type'] = 'Aporte';
+          if (descLower.includes('jcp')) {
+            tipoItem = 'JCP';
+          } else if (isYield || descLower.includes('dividendo') || descLower.includes('rendimento')) {
+            tipoItem = 'Dividendo';
+          } else if (descLower.includes('resgate')) {
+            tipoItem = 'Resgate';
+          } else if (descLower.includes('compra') || descLower.includes('ação') || descLower.includes('fii')) {
+            tipoItem = 'Compra Ações';
+          }
+
+          // Categoria amigável
+          let category = 'Investimentos';
+          if (accountType === 'fixed_income' || descLower.includes('cdi') || descLower.includes('cdb') || descLower.includes('tesouro')) {
+            category = 'Renda Fixa';
+          } else if (accountType === 'investment_broker' || descLower.includes('fii') || descLower.includes('ação')) {
+            category = 'Renda Variável';
+          } else if (descLower.includes('cripto') || descLower.includes('btc') || descLower.includes('eth')) {
+            category = 'Cripto';
+          }
+
+          // Ticker simplificado
+          let ticker = desc.replace(/(aporte|resgate|rendimento|dividendo de|jcp de|compra)/gi, '').trim();
+          if (!ticker || ticker.length > 20) {
+            ticker = (t as any).accounts?.name || 'Investimento';
+          }
+
           itensReais.push({
             id: t.display_id || t.id,
-            ticker: desc.replace(/aporte/i, '').trim() || 'Ativo',
+            ticker,
             title: desc,
-            type: isRend ? 'Dividendo' : 'Aporte',
+            type: tipoItem,
             time: hora,
-            institution: (t as any).accounts?.name || 'Corretora',
-            category: 'Investimentos',
-            detail: `${hora} • ${(t as any).accounts?.name || 'Custódia'}`,
+            institution: (t as any).accounts?.name || 'Custódia',
+            category,
+            detail: `${hora} • ${(t as any).accounts?.name || 'Conta'}`,
             amount: Number(t.total_amount),
             status: 'Liquidado',
             date: t.occurred_at,
@@ -586,10 +604,8 @@ export async function obterExtratoInvestimentos(
       }
     }
 
-    const todosItens = [...itensReais, ...mockFeed];
-
     // Aplica filtro de busca se houver
-    let itensFiltrados = todosItens;
+    let itensFiltrados = itensReais;
     if (filtro.busca && filtro.busca.trim()) {
       const q = filtro.busca.toLowerCase().trim();
       itensFiltrados = itensFiltrados.filter(
@@ -612,39 +628,39 @@ export async function obterExtratoInvestimentos(
       }
     }
 
-    // Agrupamento por mês
+    // Agrupamento por mês real
     const grupos: Record<string, ExtratoInvestimentoItem[]> = {};
     for (const item of itensFiltrados) {
-      const groupKey = item.monthGroup || 'Outubro 2024';
+      const groupKey = item.monthGroup || rotuloDoMes(mes);
       if (!grupos[groupKey]) grupos[groupKey] = [];
       grupos[groupKey].push(item);
     }
 
-    // Cálculos consolidados do mês atual
-    const mesAtualItens = todosItens.filter((i) => i.monthGroup.toLowerCase().includes('outubro'));
-    const totalAportado = mesAtualItens
+    // Cálculos consolidados 100% REAIS do período
+    const totalAportado = itensReais
       .filter((i) => i.type === 'Aporte' || i.type === 'Compra Ações')
-      .reduce((s, i) => s + i.amount, 0) || 3500.00;
+      .reduce((s, i) => s + i.amount, 0);
 
-    const proventosItens = mesAtualItens.filter((i) => i.type === 'Dividendo' || i.type === 'JCP');
-    const totalProventos = proventosItens.reduce((s, i) => s + i.amount, 0) || 420.80;
+    const proventosItens = itensReais.filter((i) => i.type === 'Dividendo' || i.type === 'JCP');
+    const totalProventos = proventosItens.reduce((s, i) => s + i.amount, 0);
 
     return {
       mesAno: mes,
       rotuloMes: rotuloDoMes(mes),
       resumoMes: {
-        totalAportado,
-        variacaoVsMesAnterior: '+18% vs set.',
-        proventos: totalProventos,
-        proventosQtd: proventosItens.length || 3,
-        rentabilidadePct: 1.45,
-        rentabilidadeEstimada: 2150.00,
+        totalAportado: Math.round(totalAportado * 100) / 100,
+        variacaoVsMesAnterior: '',
+        proventos: Math.round(totalProventos * 100) / 100,
+        proventosQtd: proventosItens.length,
+        rentabilidadePct: 0,
+        rentabilidadeEstimada: 0,
       },
       insight: {
         titulo: 'Insight Guará IA',
         tempo: 'Hoje',
-        texto:
-          'Você reinvestiu 100% dos proventos deste mês. Isso adiantou em 8 dias a projeção da sua meta de liberdade financeira.',
+        texto: totalAportado > 0
+          ? `Você aportou R$ ${totalAportado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} neste período.`
+          : 'Nenhum aporte registrado para este período. Registre seus investimentos para acompanhar sua rentabilidade.',
       },
       grupos,
       totalItens: itensFiltrados.length,

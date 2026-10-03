@@ -2,7 +2,7 @@ import { getSupabaseClient } from '../../clients/supabaseClient';
 import { withTiming, log } from '../../utils/logger';
 import { randomUUID } from 'crypto';
 import type { CardType } from '../../types/transaction';
-import { obterContaPorId, obterContaPorNome, debitarSaldo } from '../accounts/accountService';
+import { obterContaPorId, obterContaPorNome, debitarSaldo, creditarSaldo } from '../accounts/accountService';
 
 /**
  * Fase 6 — Multi-cartão com data de fechamento personalizada.
@@ -34,6 +34,7 @@ export interface ItemFaturaCartao {
   installment_number: number | null;
   installment_total: number | null;
   is_payment?: boolean;
+  payment_id?: string;
   entry_type?: string;
 }
 
@@ -552,22 +553,34 @@ export function gerarCiclosFatura(
   return ciclos;
 }
 
+export function extrairCicloDasNotas(notes?: string | null): string | null {
+  if (!notes) return null;
+  const match = notes.match(/\[ciclo:([0-9]{4}-[0-9]{2})\]/);
+  return match ? match[1] : null;
+}
+
 export async function buscarPagamentosFatura(
   cardId: string,
   inicio: Date,
   fim: Date,
   requestId: string
-): Promise<Array<{ id: string; amount: number; paid_at: string; account_id: string }>> {
+): Promise<Array<{ id: string; amount: number; paid_at: string; account_id: string; billing_cycle?: string | null; notes?: string | null }>> {
   const supabase = getSupabaseClient();
   try {
-    const { data, error } = await supabase
+    let res: any = await supabase
       .from('invoice_payments')
-      .select('id, amount, paid_at, account_id')
-      .eq('card_id', cardId)
-      .gte('paid_at', inicio.toISOString())
-      .lt('paid_at', fim.toISOString());
-    if (error) return [];
-    return (data ?? []) as any[];
+      .select('id, amount, paid_at, account_id, billing_cycle, notes')
+      .eq('card_id', cardId);
+
+    if (res.error && (res.error.message?.includes('billing_cycle') || res.error.message?.includes('column'))) {
+      res = await supabase
+        .from('invoice_payments')
+        .select('id, amount, paid_at, account_id, notes')
+        .eq('card_id', cardId);
+    }
+
+    if (res.error) return [];
+    return (res.data ?? []) as any[];
   } catch {
     return [];
   }
@@ -620,6 +633,10 @@ export async function obterFaturasDetalhadasDoCartao(
     });
 
     const pagamentosDoCiclo = pagamentos.filter((p) => {
+      const cicloDefinido = p.billing_cycle || extrairCicloDasNotas(p.notes);
+      if (cicloDefinido) {
+        return cicloDefinido === c.id;
+      }
       const pMs = new Date(p.paid_at).getTime();
       return pMs >= inicioMs && pMs < fimMs;
     });
@@ -645,6 +662,7 @@ export async function obterFaturasDetalhadasDoCartao(
         installment_number: null,
         installment_total: null,
         is_payment: true,
+        payment_id: p.id,
       });
     });
 
@@ -669,6 +687,7 @@ export interface PagamentoFaturaDTO {
   accountId: string;
   amount: number;
   paidAt?: string;
+  billingCycle?: string;
 }
 
 export interface ResultadoPagamentoFatura {
@@ -681,9 +700,29 @@ export interface ResultadoPagamentoFatura {
   accountName: string;
   amount: number;
   paidAt: string;
+  billingCycle?: string | null;
   novoSaldoConta: number;
   novaFaturaAtual: number;
   novoLimiteDisponivel: number;
+  isPatrimonio?: boolean;
+  accountType?: string;
+}
+
+export interface EstornoPagamentoDTO {
+  paymentId?: string;
+  cardId?: string;
+}
+
+export interface ResultadoEstornoPagamento {
+  sucesso: boolean;
+  mensagem: string;
+  paymentId: string;
+  cardId: string;
+  cardName: string;
+  accountId: string;
+  accountName: string;
+  amountEstornado: number;
+  novoSaldoConta: number;
 }
 
 /**
@@ -731,10 +770,12 @@ export async function processarPagamentoFatura(
       throw new Error(`Conta de origem "${dto.accountId}" não encontrada.`);
     }
 
+    const isPatrimonio = conta.type === 'fixed_income' || conta.type === 'investment_broker';
     const saldoAtualConta = Number(conta.balance || 0);
     if (saldoAtualConta < amount) {
+      const rotuloOrigem = isPatrimonio ? 'no patrimônio / investimento' : 'no bolso';
       throw new Error(
-        `Saldo insuficiente no bolso "${conta.name}". Disponível: R$ ${saldoAtualConta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}.`
+        `Saldo insuficiente ${rotuloOrigem} "${conta.name}". Disponível: R$ ${saldoAtualConta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}.`
       );
     }
 
@@ -742,23 +783,36 @@ export async function processarPagamentoFatura(
     const paidAt = dto.paidAt || new Date().toISOString();
     const authCode = `GUA-${paidAt.slice(0, 10).replace(/-/g, '')}-${randomUUID().slice(0, 6).toUpperCase()}`;
 
+    const billingCycle = dto.billingCycle?.trim() || null;
+    const cycleTag = billingCycle ? ` [ciclo:${billingCycle}]` : '';
+    const prefixoOrigem = isPatrimonio ? 'Pagamento de fatura com patrimônio' : 'Pagamento de fatura';
+
     try {
-      await supabase.from('invoice_payments').insert({
+      const payload: any = {
         card_id: card.id,
         account_id: conta.id,
         amount,
         paid_at: paidAt,
         payment_method: 'account_balance',
-        notes: `Pagamento de fatura • ${card.name}`,
-      });
+        notes: `${prefixoOrigem} • ${card.name}${cycleTag}`,
+      };
+      if (billingCycle) {
+        payload.billing_cycle = billingCycle;
+      }
+      const resPay = await supabase.from('invoice_payments').insert(payload);
+      if (resPay.error && (resPay.error.message?.includes('billing_cycle') || resPay.error.message?.includes('column'))) {
+        delete payload.billing_cycle;
+        await supabase.from('invoice_payments').insert(payload);
+      }
     } catch (errPay: any) {
       log('warn', 'Aviso ao registrar em invoice_payments', { requestId, erro: errPay.message });
     }
 
     try {
       const { data: cat } = await supabase.from('categories').select('id').limit(1).single();
+      const rotuloPatrimonio = isPatrimonio ? ` (Patrimônio • ${conta.name})` : '';
       await supabase.from('transactions').insert({
-        description: `Pagamento de Fatura • ${card.name}`,
+        description: `Pagamento de Fatura • ${card.name}${rotuloPatrimonio}${billingCycle ? ` (${billingCycle})` : ''}`,
         total_amount: amount,
         my_share_amount: amount,
         category_id: cat?.id || 1,
@@ -767,7 +821,9 @@ export async function processarPagamentoFatura(
         card_id: card.id,
         entry_type: 'transfer',
         occurred_at: paidAt,
-        raw_input: `Pagamento de fatura do cartão ${card.name} no valor de R$ ${amount}`,
+        raw_input: isPatrimonio
+          ? `Pagamento de fatura do cartão ${card.name} no valor de R$ ${amount} debitado direto do patrimônio (${conta.name})`
+          : `Pagamento de fatura do cartão ${card.name} no valor de R$ ${amount}`,
       });
     } catch (errTx: any) {
       log('warn', 'Aviso ao registrar transação no extrato', { requestId, erro: errTx.message });
@@ -783,16 +839,23 @@ export async function processarPagamentoFatura(
       requestId,
       cartao: card.name,
       conta: conta.name,
+      contaTipo: conta.type,
+      isPatrimonio,
       valor: amount,
+      billingCycle,
       authCode,
       novoSaldoConta,
       novaFaturaAtual,
       novoLimiteDisponivel,
     });
 
+    const mensagemSucesso = isPatrimonio
+      ? `Fatura de ${card.name} paga com sucesso direto do seu patrimônio! R$ ${amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} debitados de ${conta.name}.`
+      : `Fatura de ${card.name} paga com sucesso! R$ ${amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} debitados de ${conta.name}.`;
+
     return {
       sucesso: true,
-      mensagem: `Fatura de ${card.name} paga com sucesso! R$ ${amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} debitados de ${conta.name}.`,
+      mensagem: mensagemSucesso,
       authCode,
       cardId: card.id,
       cardName: card.name,
@@ -800,9 +863,114 @@ export async function processarPagamentoFatura(
       accountName: conta.name,
       amount,
       paidAt,
+      billingCycle,
+      isPatrimonio,
+      accountType: conta.type,
       novoSaldoConta,
       novaFaturaAtual,
       novoLimiteDisponivel,
+    };
+  });
+}
+
+/**
+ * Estorna um pagamento de fatura, devolvendo o saldo debitado para a conta bancária
+ * de origem, removendo o lançamento correspondente do extrato e reabrindo o saldo da fatura.
+ */
+export async function estornarPagamentoFatura(
+  dto: EstornoPagamentoDTO,
+  requestId: string
+): Promise<ResultadoEstornoPagamento> {
+  return withTiming('estornar pagamento fatura', { requestId, dto }, async () => {
+    const supabase = getSupabaseClient();
+    let payment: any = null;
+
+    if (dto.paymentId) {
+      const { data, error } = await supabase
+        .from('invoice_payments')
+        .select('*')
+        .eq('id', dto.paymentId)
+        .maybeSingle();
+      if (error || !data) {
+        throw new Error(`Pagamento com ID "${dto.paymentId}" não encontrado.`);
+      }
+      payment = data;
+    } else if (dto.cardId) {
+      const isCardUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(dto.cardId);
+      let query = supabase.from('invoice_payments').select('*').order('created_at', { ascending: false }).limit(1);
+      if (isCardUuid) {
+        query = query.eq('card_id', dto.cardId);
+      }
+      const { data, error } = await query;
+      if (error || !data || data.length === 0) {
+        throw new Error(`Nenhum pagamento encontrado para o cartão informado.`);
+      }
+      payment = data[0];
+    } else {
+      throw new Error('Informe o "paymentId" ou "cardId" para estornar o pagamento.');
+    }
+
+    const amount = Number(payment.amount || 0);
+    if (amount <= 0) {
+      throw new Error('Valor inválido no registro de pagamento.');
+    }
+
+    const { data: card } = await supabase.from('cards').select('id, name').eq('id', payment.card_id).maybeSingle();
+    const conta = await obterContaPorId(payment.account_id, requestId);
+    if (!conta) {
+      throw new Error(`Conta de origem com ID "${payment.account_id}" não encontrada.`);
+    }
+
+    // 1. Devolve o saldo para a conta (creditarSaldo)
+    const novoSaldoConta = await creditarSaldo(conta.id, amount, requestId);
+
+    // 2. Remove a transação correspondente do extrato
+    try {
+      await supabase
+        .from('transactions')
+        .delete()
+        .eq('account_id', payment.account_id)
+        .eq('card_id', payment.card_id)
+        .eq('entry_type', 'transfer')
+        .gte('occurred_at', new Date(new Date(payment.paid_at).getTime() - 120000).toISOString())
+        .lte('occurred_at', new Date(new Date(payment.paid_at).getTime() + 120000).toISOString());
+    } catch (errTx: any) {
+      log('warn', 'Aviso ao remover transação no estorno de pagamento', { requestId, erro: errTx.message });
+    }
+
+    // 3. Exclui o registro de pagamento
+    const { error: errDel } = await supabase
+      .from('invoice_payments')
+      .delete()
+      .eq('id', payment.id);
+
+    if (errDel) {
+      log('error', 'Erro ao excluir invoice_payment no estorno', { requestId, erro: errDel.message });
+      throw new Error(`Erro ao excluir registro de pagamento: ${errDel.message}`);
+    }
+
+    const cardName = card?.name || 'Cartão';
+    const accountName = conta.name;
+
+    log('info', 'Pagamento de fatura estornado com sucesso', {
+      requestId,
+      paymentId: payment.id,
+      cardName,
+      accountName,
+      amountEstornado: amount,
+      novoSaldoConta,
+    });
+
+    return {
+      sucesso: true,
+      mensagem: `Pagamento de R$ ${amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} estornado com sucesso! Saldo devolvido para ${accountName}.`,
+      paymentId: payment.id,
+      cardId: payment.card_id,
+      cardName,
+      accountId: conta.id,
+      accountName,
+      amountEstornado: amount,
+      novoSaldoConta,
     };
   });
 }

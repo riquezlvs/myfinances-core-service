@@ -6,11 +6,22 @@ import {
   definirCartao,
   getFaturaDoPeriodo,
   removerCartao,
+  extrairCicloDasNotas,
+  obterFaturasDetalhadasDoCartao,
+  processarPagamentoFatura,
+  estornarPagamentoFatura,
 } from '../../../src/services/cards/cardService';
 
 const mockFrom = vi.fn();
 vi.mock('../../../src/clients/supabaseClient', () => ({
   getSupabaseClient: () => ({ from: mockFrom }),
+}));
+
+vi.mock('../../../src/services/accounts/accountService', () => ({
+  obterContaPorId: vi.fn().mockResolvedValue({ id: 'acc-1', name: 'Conta Principal', balance: 5000 }),
+  obterContaPorNome: vi.fn().mockResolvedValue({ id: 'acc-1', name: 'Conta Principal', balance: 5000 }),
+  debitarSaldo: vi.fn().mockResolvedValue(4000),
+  creditarSaldo: vi.fn().mockResolvedValue(5000),
 }));
 
 function builder(opts: { data?: unknown; error?: unknown; single?: unknown; maybeSingle?: unknown } = {}) {
@@ -21,7 +32,9 @@ function builder(opts: { data?: unknown; error?: unknown; single?: unknown; mayb
     delete: vi.fn().mockReturnThis(),
     upsert: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    ilike: vi.fn().mockReturnThis(),
     gte: vi.fn().mockReturnThis(),
+    lte: vi.fn().mockReturnThis(),
     lt: vi.fn().mockReturnThis(),
     or: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
@@ -266,5 +279,167 @@ describe('gerarCiclosFatura (Multi-ciclos e próximas faturas)', () => {
     const cicloNovembro = ciclos.find((c) => c.id === '2026-11');
     expect(cicloNovembro).toBeDefined();
     expect(cicloNovembro?.statusPadrao).toBe('aberta');
+  });
+});
+
+describe('extrairCicloDasNotas', () => {
+  it('deve extrair o ciclo a partir da tag [ciclo:YYYY-MM]', () => {
+    expect(extrairCicloDasNotas('Pagamento de fatura • Nubank [ciclo:2026-09]')).toBe('2026-09');
+    expect(extrairCicloDasNotas('Fatura paga [ciclo:2026-10]')).toBe('2026-10');
+  });
+
+  it('deve retornar null se não houver tag no texto ou se notes for nulo', () => {
+    expect(extrairCicloDasNotas('Pagamento simples sem tag')).toBeNull();
+    expect(extrairCicloDasNotas(null)).toBeNull();
+    expect(extrairCicloDasNotas(undefined)).toBeNull();
+  });
+});
+
+describe('obterFaturasDetalhadasDoCartao com billing_cycle', () => {
+  it('pagamento feito em Outubro com billing_cycle 2026-09 deve abater a fatura de Setembro', async () => {
+    // 02/10/2026
+    const agora = new Date(2026, 9, 2);
+    const card = {
+      id: 'card-1',
+      name: 'Nubank',
+      closing_day: 25,
+      due_day: 5,
+      card_type: 'credit' as const,
+      is_default: true,
+      credit_limit: 5000,
+    };
+
+    // Compras em Setembro (fechamento 25/09)
+    const comprasMock = builder({
+      data: [
+        {
+          display_id: 101,
+          description: 'Mercado Setembro',
+          total_amount: 350.0,
+          occurred_at: '2026-09-10T12:00:00Z',
+          installment_number: null,
+          installment_total: null,
+          card_id: 'card-1',
+        },
+      ],
+    });
+
+    // Pagamento realizado em 02/10/2026 com billing_cycle explicitamente 2026-09
+    const pagamentosMock = builder({
+      data: [
+        {
+          id: 'pay-setembro-1',
+          amount: 350.0,
+          paid_at: '2026-10-02T15:00:00Z',
+          account_id: 'acc-1',
+          billing_cycle: '2026-09',
+          notes: 'Pagamento de fatura • Nubank [ciclo:2026-09]',
+        },
+      ],
+    });
+
+    mockFrom.mockImplementationOnce(() => comprasMock);
+    mockFrom.mockImplementationOnce(() => pagamentosMock);
+
+    const faturas = await obterFaturasDetalhadasDoCartao(card, true, 'req-test', agora);
+
+    const faturaSetembro = faturas.find((f) => f.id === '2026-09');
+    expect(faturaSetembro).toBeDefined();
+    expect(faturaSetembro?.totalCompras).toBe(350);
+    expect(faturaSetembro?.totalPago).toBe(350);
+    expect(faturaSetembro?.valorFatura).toBe(0);
+    expect(faturaSetembro?.status).toBe('paga');
+    expect(faturaSetembro?.itens[0]?.payment_id).toBe('pay-setembro-1');
+
+    // Fatura de Outubro não deve ter sido abatida pelo pagamento de Setembro
+    const faturaOutubro = faturas.find((f) => f.id === '2026-10');
+    expect(faturaOutubro).toBeDefined();
+    expect(faturaOutubro?.totalPago).toBe(0);
+  });
+});
+
+describe('estornarPagamentoFatura', () => {
+  it('deve devolver o saldo para a conta, excluir o pagamento e a transação', async () => {
+    const paymentRow = {
+      id: 'pay-errado-1',
+      card_id: 'card-1',
+      account_id: 'acc-1',
+      amount: 450.0,
+      paid_at: '2026-10-02T10:00:00Z',
+      notes: 'Pagamento de fatura • Nubank',
+    };
+
+    // 1. Busca pagamento por paymentId
+    const bFindPayment = builder({ maybeSingle: paymentRow });
+    // 2. Busca cartão
+    const bFindCard = builder({ maybeSingle: { id: 'card-1', name: 'Nubank' } });
+    // 3. Delete transaction
+    const bDelTx = builder();
+    // 4. Delete invoice_payments
+    const bDelPay = builder({ error: null });
+
+    mockFrom.mockImplementationOnce(() => bFindPayment);
+    mockFrom.mockImplementationOnce(() => bFindCard);
+    mockFrom.mockImplementationOnce(() => bDelTx);
+    mockFrom.mockImplementationOnce(() => bDelPay);
+
+    const res = await estornarPagamentoFatura({ paymentId: 'pay-errado-1' }, 'req-estorno');
+
+    expect(res.sucesso).toBe(true);
+    expect(res.amountEstornado).toBe(450.0);
+    expect(res.cardName).toBe('Nubank');
+    expect(res.accountName).toBe('Conta Principal');
+    expect(res.novoSaldoConta).toBe(5000);
+  });
+});
+
+describe('processarPagamentoFatura com patrimônio', () => {
+  it('deve debitar diretamente de conta de patrimônio (fixed_income) sem transferência prévia', async () => {
+    const caixinhaId = 'a0000000-0000-0000-0000-000000000001';
+    const { obterContaPorId, obterContaPorNome } = await import('../../../src/services/accounts/accountService');
+    const contaMock = {
+      id: caixinhaId,
+      name: 'Nubank Caixinha Reserva',
+      type: 'fixed_income',
+      balance: 10000,
+    };
+    (obterContaPorId as any).mockResolvedValueOnce(contaMock);
+    (obterContaPorNome as any).mockResolvedValueOnce(contaMock);
+
+    // 1. Busca cartão
+    const bCard = builder({ maybeSingle: { id: 'card-1', name: 'Nubank', closing_day: 25, due_day: 5, credit_limit: 5000 } });
+    // 2. Insert invoice_payments
+    const bPay = builder();
+    // 3. Select category
+    const bCat = builder({ single: { id: 1 } });
+    // 4. Insert transactions
+    const bTx = builder();
+    // 5. obterFaturasDetalhadasDoCartao -> transações
+    const bTransacoes = builder({ data: [] });
+    // 6. obterFaturasDetalhadasDoCartao -> pagamentos
+    const bPagamentos = builder({ data: [] });
+
+    mockFrom.mockImplementationOnce(() => bCard);
+    mockFrom.mockImplementationOnce(() => bPay);
+    mockFrom.mockImplementationOnce(() => bCat);
+    mockFrom.mockImplementationOnce(() => bTx);
+    mockFrom.mockImplementationOnce(() => bTransacoes);
+    mockFrom.mockImplementationOnce(() => bPagamentos);
+
+    const res = await processarPagamentoFatura(
+      {
+        cardId: 'card-1',
+        accountId: caixinhaId,
+        amount: 800,
+        billingCycle: '2026-09',
+      },
+      'req-patrimonio'
+    );
+
+    expect(res.sucesso).toBe(true);
+    expect(res.isPatrimonio).toBe(true);
+    expect(res.accountType).toBe('fixed_income');
+    expect(res.accountName).toBe('Nubank Caixinha Reserva');
+    expect(res.mensagem).toContain('direto do seu patrimônio');
   });
 });

@@ -14,7 +14,7 @@ import {
   confirmarTransacaoUnificado,
 } from '../core/engine';
 import { obterDadosGraficosDashboard, apagarTransacaoComGrupo } from '../services/transactions/transactionService';
-import { obterCartoesDetalhados, cadastrarNovoCartao, removerCartao, processarPagamentoFatura } from '../services/cards/cardService';
+import { obterCartoesDetalhados, cadastrarNovoCartao, removerCartao, processarPagamentoFatura, estornarPagamentoFatura } from '../services/cards/cardService';
 import {
   obterDadosInvestimentosDashboard,
   cadastrarAtivoInvestimento,
@@ -394,7 +394,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         const numericId = parseInt(idParam, 10);
         let txData: any = null;
 
-        // 1. Tenta buscar com observation e relação accounts!account_id
+        // 1. Tenta buscar com observation, tags e relação accounts!account_id
         let queryWithRel = supabase
           .from('transactions')
           .select(`
@@ -410,6 +410,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             installment_total,
             installment_group_id,
             observation,
+            tags,
             account_id,
             category_id,
             is_recurring,
@@ -428,8 +429,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         if (!errRel && dataWithRelations) {
           txData = dataWithRelations;
         } else {
-          // 2. Se falhar (ex: coluna observation ainda não existe no DB), tenta sem observation
-          let queryWithoutObs = supabase
+          // 2. Se falhar (ex: coluna observation ou tags ainda não existem no DB), tenta com observation
+          let queryWithObs = supabase
             .from('transactions')
             .select(`
               id,
@@ -443,6 +444,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
               installment_number,
               installment_total,
               installment_group_id,
+              observation,
               account_id,
               category_id,
               is_recurring,
@@ -451,17 +453,50 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             `);
 
           if (!isNaN(numericId) && String(numericId) === idParam.trim()) {
-            queryWithoutObs = queryWithoutObs.eq('display_id', numericId);
+            queryWithObs = queryWithObs.eq('display_id', numericId);
           } else {
-            queryWithoutObs = queryWithoutObs.eq('id', idParam.trim());
+            queryWithObs = queryWithObs.eq('id', idParam.trim());
           }
 
-          const { data: dataWithoutObs, error: errWithoutObs } = await queryWithoutObs.maybeSingle();
+          const { data: dataWithObs, error: errWithObs } = await queryWithObs.maybeSingle();
 
-          if (!errWithoutObs && dataWithoutObs) {
-            txData = { ...dataWithoutObs, observation: null };
+          if (!errWithObs && dataWithObs) {
+            txData = { ...dataWithObs, tags: null };
           } else {
-            // 3. Fallback simples sem relacionamento com accounts
+            // 3. Tenta sem observation nem tags
+            let queryWithoutObs = supabase
+              .from('transactions')
+              .select(`
+                id,
+                display_id,
+                description,
+                total_amount,
+                occurred_at,
+                payment_method,
+                entry_type,
+                raw_input,
+                installment_number,
+                installment_total,
+                installment_group_id,
+                account_id,
+                category_id,
+                is_recurring,
+                categories (id, name),
+                accounts!account_id (id, name, type)
+              `);
+
+            if (!isNaN(numericId) && String(numericId) === idParam.trim()) {
+              queryWithoutObs = queryWithoutObs.eq('display_id', numericId);
+            } else {
+              queryWithoutObs = queryWithoutObs.eq('id', idParam.trim());
+            }
+
+            const { data: dataWithoutObs, error: errWithoutObs } = await queryWithoutObs.maybeSingle();
+
+            if (!errWithoutObs && dataWithoutObs) {
+              txData = { ...dataWithoutObs, observation: null, tags: null };
+            } else {
+              // 4. Fallback simples sem relacionamento com accounts
             let simpleQuery = supabase
               .from('transactions')
               .select(`
@@ -494,6 +529,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             }
           }
         }
+      }
 
         sendJson(res, 200, {
           sucesso: true,
@@ -802,6 +838,15 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       if (body.entry_type !== undefined) updatePayload.entry_type = body.entry_type;
       if (body.observation !== undefined) updatePayload.observation = body.observation;
       if (body.category_id !== undefined) updatePayload.category_id = Number(body.category_id);
+      if (body.installment_total !== undefined) {
+        updatePayload.installment_total = body.installment_total ? Number(body.installment_total) : null;
+      }
+      if (body.installment_number !== undefined) {
+        updatePayload.installment_number = body.installment_number ? Number(body.installment_number) : null;
+      }
+      if (body.tags !== undefined) {
+        updatePayload.tags = Array.isArray(body.tags) ? body.tags : null;
+      }
 
       let { data, error } = await supabase
         .from('transactions')
@@ -814,14 +859,19 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
           occurred_at,
           payment_method,
           entry_type,
+          installment_number,
+          installment_total,
+          installment_group_id,
           observation,
+          tags,
           categories (id, name)
         `)
         .maybeSingle();
 
-      if (error && (error.message?.includes('observation') || error.code === '42703')) {
+      if (error && (error.message?.includes('observation') || error.message?.includes('tags') || error.code === '42703')) {
         const fallbackPayload = { ...updatePayload };
         delete fallbackPayload.observation;
+        delete fallbackPayload.tags;
         const fallbackRes = await supabase
           .from('transactions')
           .update(fallbackPayload)
@@ -833,10 +883,13 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
             occurred_at,
             payment_method,
             entry_type,
+            installment_number,
+            installment_total,
+            installment_group_id,
             categories (id, name)
           `)
           .maybeSingle();
-        data = fallbackRes.data ? { ...fallbackRes.data, observation: null } : null;
+        data = fallbackRes.data ? { ...fallbackRes.data, observation: null, tags: null } : null;
         error = fallbackRes.error;
       }
 
@@ -1035,12 +1088,15 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         return true;
       }
 
+      const billingCycle = body?.billingCycle || body?.billing_cycle;
+
       const resultado = await processarPagamentoFatura(
         {
           cardId: String(cardId),
           accountId: String(accountId),
           amount,
           paidAt: body?.paidAt || body?.paid_at,
+          billingCycle: billingCycle ? String(billingCycle) : undefined,
         },
         requestId
       );
@@ -1052,6 +1108,44 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 400, {
         sucesso: false,
         mensagem: err.message || 'Erro ao processar pagamento de fatura.',
+      });
+      return true;
+    }
+  }
+
+  // Rota: POST /api/cards/cancel-invoice-payment ou /api/cartoes/estornar-fatura (Estorno de pagamento de fatura)
+  if (
+    (url === '/api/cards/cancel-invoice-payment' || url === '/api/cartoes/estornar-fatura') &&
+    method === 'POST'
+  ) {
+    try {
+      const body = await parseJsonBody(req);
+      const paymentId = body?.paymentId || body?.payment_id;
+      const cardId = body?.cardId || body?.card_id;
+
+      if (!paymentId && !cardId) {
+        sendJson(res, 400, {
+          sucesso: false,
+          mensagem: 'Informe "paymentId" ou "cardId" para estornar o pagamento.',
+        });
+        return true;
+      }
+
+      const resultado = await estornarPagamentoFatura(
+        {
+          paymentId: paymentId ? String(paymentId) : undefined,
+          cardId: cardId ? String(cardId) : undefined,
+        },
+        requestId
+      );
+
+      sendJson(res, 200, resultado);
+      return true;
+    } catch (err: any) {
+      log('error', 'Erro ao estornar pagamento de fatura', { requestId, erro: err.message });
+      sendJson(res, 400, {
+        sucesso: false,
+        mensagem: err.message || 'Erro ao estornar pagamento de fatura.',
       });
       return true;
     }
