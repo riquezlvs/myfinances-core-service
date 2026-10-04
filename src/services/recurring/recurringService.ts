@@ -196,7 +196,7 @@ export async function cadastrarNovaRecorrencia(
     total_amount: number;
     day_of_month: number;
     entry_type?: 'expense' | 'income';
-    payment_method?: 'pix' | 'credit_card' | 'debit_card';
+    payment_method?: 'pix' | 'credit_card' | 'debit_card' | 'meal_voucher';
     category_id?: number | null;
     account_id?: string | null;
     income_type?: 'salary' | 'freelance' | 'benefit' | 'other' | null;
@@ -225,6 +225,8 @@ export async function cadastrarNovaRecorrencia(
       payload.payment_method = dados.payment_method;
     } else if (entryType === 'expense') {
       payload.payment_method = 'credit_card';
+    } else {
+      payload.payment_method = 'pix';
     }
 
     let categoryId = dados.category_id;

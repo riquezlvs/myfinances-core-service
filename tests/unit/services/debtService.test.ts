@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getSaldoTerceiros, processarPagamento, salvarDividida, listarListasDivididas } from '../../../src/services/debts/debtService';
+import { getSaldoTerceiros, processarPagamento, salvarDividida, listarListasDivididas, obterResumoDividasPorMes } from '../../../src/services/debts/debtService';
 import * as peopleModule from '../../../src/services/people/peopleService';
 
 // Mock do módulo do cliente Supabase (evita conexão real).
@@ -240,7 +240,7 @@ describe('salvarDividida', () => {
     expect(resultado.transactionId).toBe('t1');
   });
 
-  it('deve lançar erro com menos de 2 pessoas', async () => {
+  it('deve lançar erro com lista de pessoas vazia', async () => {
     await expect(
       salvarDividida({
         descricao: 'Jantar',
@@ -248,10 +248,34 @@ describe('salvarDividida', () => {
         categoryId: 1,
         paymentMethod: 'pix',
         ocorreuEm: '2026-09-15T20:00:00',
-        pessoas: ['Maria'],
+        pessoas: [],
         requestId: 'req-1',
       })
-    ).rejects.toThrow('pelo menos 2 pessoas');
+    ).rejects.toThrow('pelo menos 1 pessoa');
+  });
+
+  it('deve permitir dividir com 1 amigo (2 partes iguais)', async () => {
+    vi.spyOn(peopleModule, 'listarOuCriarPessoas').mockResolvedValueOnce(
+      new Map([['maria', 'p1']])
+    );
+    mockFrom
+      .mockImplementationOnce(() => builderResolvendo({ id: 't-novo' })) // insert principal
+      .mockImplementationOnce(() => builderResolvendo(null)); // insert Maria
+
+    const resultado = await salvarDividida({
+      descricao: 'Almoço',
+      total: 100,
+      categoryId: 1,
+      paymentMethod: 'pix',
+      ocorreuEm: '2026-09-15T20:00:00',
+      pessoas: ['Maria'],
+      requestId: 'req-1',
+    });
+
+    expect(resultado.total).toBe(100);
+    expect(resultado.minhaParte).toBe(50);
+    expect(resultado.partes).toHaveLength(1);
+    expect(resultado.partes[0].valor).toBe(50);
   });
 
   it('deve lançar erro com descrição vazia', async () => {
@@ -300,5 +324,45 @@ describe('listarListasDivididas', () => {
     const linhas = await listarListasDivididas('req-1', '2026-09');
 
     expect(linhas).toEqual([]);
+  });
+});
+
+describe('obterResumoDividasPorMes', () => {
+  it('deve agrupar total por mês e calcular valores corretamente', async () => {
+    mockFrom
+      .mockImplementationOnce(() =>
+        builderResolvendo([
+          {
+            display_id: 1,
+            description: 'Jantar Outubro',
+            third_party_id: 'p1',
+            third_party_share_amount: 80,
+            occurred_at: '2026-10-01T20:00:00Z',
+          },
+          {
+            display_id: 2,
+            description: 'Almoço Setembro',
+            third_party_id: 'p1',
+            third_party_share_amount: 40,
+            occurred_at: '2026-09-10T12:00:00Z',
+          },
+        ])
+      )
+      .mockImplementationOnce(() =>
+        builderResolvendo([
+          { person_id: 'p1', amount: 30, created_at: '2026-10-02T10:00:00Z' },
+        ])
+      );
+
+    const resumo = await obterResumoDividasPorMes('req-1', '2026-10');
+
+    expect(resumo.totalAReceberMes).toBe(80);
+    expect(resumo.totalAReceberGeral).toBe(90); // (80 + 40) - 30 = 90
+    expect(resumo.pendentesCountMes).toBe(1);
+    expect(resumo.porMes).toHaveLength(2);
+    expect(resumo.porMes[0].mesAno).toBe('2026-10');
+    expect(resumo.porMes[0].total).toBe(80);
+    expect(resumo.porMes[1].mesAno).toBe('2026-09');
+    expect(resumo.porMes[1].total).toBe(40);
   });
 });

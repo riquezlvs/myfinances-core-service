@@ -172,6 +172,21 @@ export async function processarPagamento(
   return { status: 'parcial', nome, valorPago, saldoRestante, avisoValorAjustado };
 }
 
+export interface ResumoDividasPorMes {
+  totalAReceber: number;
+  totalAReceberMes: number;
+  totalAReceberGeral: number;
+  pendentesCount: number;
+  pendentesCountMes: number;
+  pendentesCountGeral: number;
+  porMes: Array<{
+    mesAno: string;
+    rotulo: string;
+    total: number;
+    pendentesCount: number;
+  }>;
+}
+
 /**
  * 8.7 — Split de contas avançado: registra uma transação principal e cria
  * linhas de dívida para cada pessoa mencionada.
@@ -181,14 +196,11 @@ export async function processarPagamento(
  *   - minhaParte = R$ 40,00 (total / numeroDePessoas)
  *   - 2 linhas de dívida: Maria R$ 40,00, João R$ 40,00
  *
- * SEGURANÇA:
- * - Pessoas são resolvidas em CÓDIGO (listarOuCriarPessoas), nunca via IA.
- * - my_share_amount = total / n (arredondado), nunca negativo.
- * - third_party_share_amount = total - minhaParte, dividido entre as pessoas.
- * - Todas as operações rodam em sequência (sem transação explícita do Supabase,
- *   mas com consistência eventual garantida pelo fluxo do handler).
+ * Se displayId for informado, atualiza a transação original existente em vez de
+ * duplicá-la.
  */
 export async function salvarDividida(params: {
+  displayId?: number;
   descricao: string;
   total: number;
   categoryId: number;
@@ -197,13 +209,13 @@ export async function salvarDividida(params: {
   pessoas: string[];
   requestId: string;
 }): Promise<ResultadoSplit> {
-  const { descricao, total, categoryId, paymentMethod, ocorreuEm, pessoas, requestId } = params;
+  const { displayId, descricao, total, categoryId, paymentMethod, ocorreuEm, pessoas, requestId } = params;
 
-  return withTiming('salvar despesa dividida', { requestId, total, qtdPessoas: pessoas.length }, async () => {
+  return withTiming('salvar despesa dividida', { requestId, total, qtdPessoas: pessoas?.length ?? 0 }, async () => {
     if (!descricao || !descricao.trim()) throw new Error('Descrição da despesa dividida é obrigatória.');
     if (!Number.isFinite(total) || total <= 0) throw new Error('Total da despesa dividida inválido.');
-    if (!pessoas || pessoas.length < 2) {
-      throw new Error('São necessárias pelo menos 2 pessoas para dividir a conta.');
+    if (!pessoas || pessoas.length < 1) {
+      throw new Error('Informe pelo menos 1 pessoa para dividir a conta.');
     }
 
     const supabase = getSupabaseClient();
@@ -212,37 +224,64 @@ export async function salvarDividida(params: {
     // Calcula partes: n = pessoas citadas + o usuário.
     const n = pessoas.length + 1;
     const minhaParte = Math.round((total / n) * 100) / 100;
-    const parteCadaOutro = Math.round((total - minhaParte) / pessoas.length * 100) / 100;
+    const parteCadaOutro = Math.round(((total - minhaParte) / pessoas.length) * 100) / 100;
 
-    // UUID compartilhado entre a transação principal e todas as linhas de dívida.
-    // Isso permite que apagarTransacaoComGrupo remova o conjunto inteiro quando
-    // o usuário descarta o lançamento do extrato.
-    const grupoSplit = randomUUID();
+    let grupoSplit = randomUUID();
+    let transactionId = '';
 
-    // Registra a transação principal (com third_party_share_amount = total - minhaParte).
-    const { data: transacao, error: erroTransacao } = await supabase
-      .from('transactions')
-      .insert({
-        description: descricao.trim(),
-        total_amount: total,
-        category_id: categoryId,
-        payment_method: paymentMethod,
-        occurred_at: ocorreuEm,
-        my_share_amount: minhaParte,
-        third_party_share_amount: total - minhaParte,
-        installment_group_id: grupoSplit,
-      })
-      .select('id')
-      .single();
+    if (displayId) {
+      const { data: existingTx } = await supabase
+        .from('transactions')
+        .select('id, installment_group_id')
+        .eq('display_id', displayId)
+        .maybeSingle();
 
-    if (erroTransacao) throw new Error(`Erro ao registrar despesa dividida: ${erroTransacao.message}`);
+      if (existingTx) {
+        transactionId = existingTx.id;
+        grupoSplit = existingTx.installment_group_id || grupoSplit;
+        const { error: erroUpdate } = await supabase
+          .from('transactions')
+          .update({
+            my_share_amount: minhaParte,
+            third_party_share_amount: total - minhaParte,
+            installment_group_id: grupoSplit,
+          })
+          .eq('id', existingTx.id);
 
-    // Cria as dívidas individuais para cada outra pessoa.
+        if (erroUpdate) {
+          throw new Error(`Erro ao atualizar transação original: ${erroUpdate.message}`);
+        }
+      }
+    }
+
+    if (!transactionId) {
+      // Registra a transação principal se não veio displayId existente
+      const { data: transacao, error: erroTransacao } = await supabase
+        .from('transactions')
+        .insert({
+          description: descricao.trim(),
+          total_amount: total,
+          category_id: categoryId,
+          payment_method: paymentMethod,
+          occurred_at: ocorreuEm,
+          my_share_amount: minhaParte,
+          third_party_share_amount: total - minhaParte,
+          installment_group_id: grupoSplit,
+        })
+        .select('id')
+        .single();
+
+      if (erroTransacao) throw new Error(`Erro ao registrar despesa dividida: ${erroTransacao.message}`);
+      transactionId = transacao.id as string;
+    }
+
+    // Cria as dívidas individuais para cada outra pessoa
+    // Nota: total_amount = 0 para não inflacionar o total de gastos do extrato,
+    // enquanto third_party_share_amount armazena o débito a receber
     const partes: Array<{ nome: string; pessoaId: string; valor: number }> = [];
     const nomesResolvidos = [...mapaPessoas.entries()];
 
     for (const [nomeNormalizado, pessoaId] of nomesResolvidos) {
-      // Pula se for o próprio usuário (não deveria aconteca, mas segurança).
       if (!pessoaId) continue;
       const nomeOriginal = pessoas.find((p) => p.trim().toLowerCase() === nomeNormalizado);
       if (!nomeOriginal) continue;
@@ -251,11 +290,11 @@ export async function salvarDividida(params: {
         .from('transactions')
         .insert({
           description: `${descricao.trim()} (parte de ${nomeOriginal})`,
-          total_amount: parteCadaOutro,
+          total_amount: 0,
           category_id: categoryId,
           payment_method: paymentMethod,
           occurred_at: ocorreuEm,
-          my_share_amount: parteCadaOutro,
+          my_share_amount: 0,
           third_party_id: pessoaId,
           third_party_share_amount: parteCadaOutro,
           installment_group_id: grupoSplit,
@@ -268,17 +307,107 @@ export async function salvarDividida(params: {
 
     log('info', 'Despesa dividida registrada', {
       requestId,
-      transactionId: transacao.id,
+      transactionId,
       total,
       minhaParte,
       partes: partes.length,
     });
 
     return {
-      transactionId: transacao.id as string,
+      transactionId,
       total,
       minhaParte,
       partes,
+    };
+  });
+}
+
+/**
+ * Obtém resumo estatístico consolidado de dívidas por mês
+ */
+export async function obterResumoDividasPorMes(
+  requestId: string,
+  mesAnoAlvo?: string
+): Promise<ResumoDividasPorMes> {
+  return withTiming('obter resumo de dívidas por mês', { requestId, mesAnoAlvo }, async () => {
+    const supabase = getSupabaseClient();
+    const mesFiltro = mesAnoAlvo || mesAnoAtual();
+
+    // 1. Busca todas as transações com dívida
+    const { data: dividas, error: erroDividas } = await supabase
+      .from('transactions')
+      .select('display_id, description, third_party_id, third_party_share_amount, occurred_at, people(name)')
+      .gt('third_party_share_amount', 0);
+
+    if (erroDividas) throw new Error(`Erro ao buscar dívidas: ${erroDividas.message}`);
+
+    // 2. Busca todos os pagamentos
+    const { data: pagamentos, error: erroPagamentos } = await supabase
+      .from('debt_payments')
+      .select('person_id, amount, created_at');
+
+    if (erroPagamentos) throw new Error(`Erro ao buscar pagamentos: ${erroPagamentos.message}`);
+
+    const pagamentosPorId = new Map<string, number>();
+    for (const p of pagamentos ?? []) {
+      const atual = pagamentosPorId.get(p.person_id) ?? 0;
+      pagamentosPorId.set(p.person_id, atual + Number(p.amount));
+    }
+
+    // Agrupa por mês e por pessoa
+    const mesesMap = new Map<string, { total: number; pessoas: Set<string> }>();
+    const saldosGeraisPorPessoa = new Map<string, number>();
+
+    for (const linha of (dividas ?? []) as any[]) {
+      const id = linha.third_party_id;
+      const valor = Number(linha.third_party_share_amount || 0);
+      if (!id || valor <= 0) continue;
+
+      saldosGeraisPorPessoa.set(id, (saldosGeraisPorPessoa.get(id) ?? 0) + valor);
+
+      const mes = (linha.occurred_at || '').substring(0, 7) || mesAnoAtual();
+      const mesData = mesesMap.get(mes) ?? { total: 0, pessoas: new Set<string>() };
+      mesData.total += valor;
+      mesData.pessoas.add(id);
+      mesesMap.set(mes, mesData);
+    }
+
+    // Calcula saldo geral restante abatendo pagamentos
+    let totalAReceberGeral = 0;
+    let pendentesCountGeral = 0;
+    for (const [id, totalDevido] of saldosGeraisPorPessoa.entries()) {
+      const pago = pagamentosPorId.get(id) ?? 0;
+      const saldo = Math.max(0, Math.round((totalDevido - pago) * 100) / 100);
+      if (saldo > 0.009) {
+        totalAReceberGeral += saldo;
+        pendentesCountGeral++;
+      }
+    }
+    totalAReceberGeral = Math.round(totalAReceberGeral * 100) / 100;
+
+    // Métricas do mês alvo
+    const mesAlvoData = mesesMap.get(mesFiltro);
+    const totalMesAlvo = Math.round((mesAlvoData?.total ?? 0) * 100) / 100;
+    const pendentesCountMes = mesAlvoData?.pessoas.size ?? 0;
+
+    // Lista de meses ordenada descrescente
+    const mesesOrdenados = Array.from(mesesMap.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([m, d]) => ({
+        mesAno: m,
+        rotulo: m,
+        total: Math.round(d.total * 100) / 100,
+        pendentesCount: d.pessoas.size,
+      }));
+
+    return {
+      totalAReceber: mesAnoAlvo ? totalMesAlvo : totalAReceberGeral,
+      totalAReceberMes: totalMesAlvo,
+      totalAReceberGeral,
+      pendentesCount: mesAnoAlvo ? pendentesCountMes : pendentesCountGeral,
+      pendentesCountMes,
+      pendentesCountGeral,
+      porMes: mesesOrdenados,
     };
   });
 }

@@ -96,6 +96,7 @@ export async function registrarReceitaAvulsa(
           category_id: categoryId,
           income_type: dados.incomeType || 'salary',
           weekend_rule: dados.weekendRule || 'anticipate',
+          payment_method: dados.paymentMethod || 'pix',
         },
         requestId
       ).catch((errRec: any) => {

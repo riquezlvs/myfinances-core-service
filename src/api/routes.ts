@@ -25,7 +25,7 @@ import {
   obterExtratoInvestimentos,
 } from '../services/investments/investmentService';
 import { listarPessoasComSaldos, cadastrarNovaPessoa } from '../services/people/peopleService';
-import { getSaldoTerceiros, registrarPagamentoNoBanco, processarPagamento, salvarDividida } from '../services/debts/debtService';
+import { getSaldoTerceiros, registrarPagamentoNoBanco, processarPagamento, salvarDividida, obterResumoDividasPorMes } from '../services/debts/debtService';
 import { obterPosicaoConsolidadaTitular } from '../services/accounts/accountService';
 import { registrarReceitaAvulsa } from '../services/incomes/incomeService';
 import {
@@ -944,6 +944,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       const ocorreuEm = body.occurred_at || tx?.occurred_at || new Date().toISOString();
 
       const resultado = await salvarDividida({
+        displayId: display_id ? parseInt(String(display_id), 10) : undefined,
         descricao,
         total,
         categoryId,
@@ -1422,26 +1423,31 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   // Rota: GET /api/debts/summary (Resumo consolidado do topo de Quem Me Deve)
   if (url === '/api/debts/summary' && method === 'GET') {
     try {
-      const saldos = await getSaldoTerceiros(requestId, true);
-      const totalAReceber = saldos.reduce((acc, s) => acc + (s.valor || 0), 0);
-      const pendentesCount = saldos.filter((s) => s.valor > 0).length;
+      const mesAno = parsedUrl.searchParams.get('mes') || parsedUrl.searchParams.get('mesAno') || undefined;
+      const resumoMeses = await obterResumoDividasPorMes(requestId, mesAno);
 
       // Busca cartões para comparativo de fatura
       const cartoes = await obterCartoesDetalhados(requestId).catch(() => []);
       const cartaoPrincipal = cartoes.find((c: any) => c.is_default) || cartoes[0];
       const faturaCartao = cartaoPrincipal?.faturaAtual || 0;
+      const totalAReceber = resumoMeses.totalAReceber;
       const percentualFatura = faturaCartao > 0 ? Math.round((totalAReceber / faturaCartao) * 100) : 0;
 
       sendJson(res, 200, {
         sucesso: true,
         dados: {
-          totalAReceber,
+          totalAReceber: resumoMeses.totalAReceber,
+          totalAReceberMes: resumoMeses.totalAReceberMes,
+          totalAReceberGeral: resumoMeses.totalAReceberGeral,
           faturaCartao,
           nomeCartao: cartaoPrincipal?.name || 'Cartão Principal',
           percentualFatura,
-          pendentesCount,
-          totalPago: 350.0, // base estimada ou agregada
-          devedores: saldos,
+          pendentesCount: resumoMeses.pendentesCount,
+          pendentesCountMes: resumoMeses.pendentesCountMes,
+          pendentesCountGeral: resumoMeses.pendentesCountGeral,
+          totalPago: 0,
+          mesReferencia: mesAno,
+          porMes: resumoMeses.porMes,
         },
       });
       return true;

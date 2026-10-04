@@ -88,6 +88,8 @@ export interface PessoaComSaldo {
   created_at?: string;
   initials: string;
   saldoDevedor: number;
+  saldoDevedorMes?: number;
+  saldoDevedorTotal?: number;
   totalOriginal: number;
   totalPago: number;
   status: 'Em aberto' | 'Zerado';
@@ -130,14 +132,14 @@ export async function listarPessoasComSaldos(
     const { data: transacoesDividas, error: erroDividas } = await queryDividas;
     if (erroDividas) throw new Error(`Erro ao buscar dívidas: ${erroDividas.message}`);
 
-    // 3. Busca todos os pagamentos de dívidas
+    // 3. Busca todos os pagamentos de dívidas (tabela debt_payments possui person_id, amount, created_at)
     const { data: pagamentos, error: erroPagamentos } = await supabase
       .from('debt_payments')
-      .select('person_id, amount, paid_at, created_at');
+      .select('person_id, amount, created_at');
 
     if (erroPagamentos) throw new Error(`Erro ao buscar pagamentos de dívidas: ${erroPagamentos.message}`);
 
-    // Agrupa pagamentos por person_id (total e filtrado se houver mesAno)
+    // Agrupa pagamentos por person_id
     const pagamentosPorId = new Map<string, number>();
     for (const p of pagamentos ?? []) {
       const atual = pagamentosPorId.get(p.person_id) ?? 0;
@@ -157,22 +159,27 @@ export async function listarPessoasComSaldos(
     return pessoas.map((p: any) => {
       const todasDividas = dividasPorId.get(p.id) ?? [];
       
-      // Se mesAno informado (ex: "2026-09"), filtra itens cujo occurred_at comece com mesAno
+      // Se mesAno informado (ex: "2026-10"), filtra itens cujo occurred_at comece com mesAno
       const dividasFiltradas = mesAno
         ? todasDividas.filter((d: any) => d.occurred_at && d.occurred_at.startsWith(mesAno))
         : todasDividas;
 
-      const totalOriginal = todasDividas.reduce(
-        (acc: number, curr: any) => acc + Number(curr.third_party_share_amount || 0),
-        0
-      );
-      const totalMesOriginal = dividasFiltradas.reduce(
-        (acc: number, curr: any) => acc + Number(curr.third_party_share_amount || 0),
-        0
-      );
+      const totalOriginal = Math.round(
+        todasDividas.reduce(
+          (acc: number, curr: any) => acc + Number(curr.third_party_share_amount || 0),
+          0
+        ) * 100
+      ) / 100;
 
-      const totalPago = pagamentosPorId.get(p.id) ?? 0;
-      const saldoDevedor = Math.max(0, Math.round((totalOriginal - totalPago) * 100) / 100);
+      const totalMesOriginal = Math.round(
+        dividasFiltradas.reduce(
+          (acc: number, curr: any) => acc + Number(curr.third_party_share_amount || 0),
+          0
+        ) * 100
+      ) / 100;
+
+      const totalPago = Math.round((pagamentosPorId.get(p.id) ?? 0) * 100) / 100;
+      const saldoDevedorGeral = Math.max(0, Math.round((totalOriginal - totalPago) * 100) / 100);
 
       // Iniciais para o avatar
       const nomes = (p.name || '').trim().split(/\s+/);
@@ -195,10 +202,12 @@ export async function listarPessoasComSaldos(
         name: p.name,
         created_at: p.created_at,
         initials,
-        saldoDevedor,
+        saldoDevedor: mesAno ? totalMesOriginal : saldoDevedorGeral,
+        saldoDevedorMes: totalMesOriginal,
+        saldoDevedorTotal: saldoDevedorGeral,
         totalOriginal: mesAno ? totalMesOriginal : totalOriginal,
         totalPago,
-        status: saldoDevedor > 0 ? ('Em aberto' as const) : ('Zerado' as const),
+        status: (mesAno ? totalMesOriginal > 0 : saldoDevedorGeral > 0) ? ('Em aberto' as const) : ('Zerado' as const),
         itensInclusos,
       };
     });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { buscarPessoaId, resolveThirdPartyId, listarOuCriarPessoas } from '../../../src/services/people/peopleService';
+import { buscarPessoaId, resolveThirdPartyId, listarOuCriarPessoas, listarPessoasComSaldos } from '../../../src/services/people/peopleService';
 
 const mockFrom = vi.fn();
 const mockRpc = vi.fn();
@@ -20,6 +20,8 @@ function builderResolvendo(data: unknown, error: unknown = null) {
     update: vi.fn().mockReturnThis(),
     delete: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    gt: vi.fn().mockReturnThis(),
+    ilike: vi.fn().mockReturnThis(),
     in: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
@@ -120,5 +122,86 @@ describe('listarOuCriarPessoas', () => {
     const mapa = await listarOuCriarPessoas(['Maria', 'Maria', 'maria'], 'req-1');
 
     expect(mapa.size).toBe(1);
+  });
+});
+
+describe('listarPessoasComSaldos', () => {
+  it('deve listar pessoas com saldos e não requisitar paid_at de debt_payments', async () => {
+    // 1. people
+    mockFrom.mockImplementationOnce(() =>
+      builderResolvendo([
+        { id: 'p1', name: 'Maria Silva', created_at: '2026-09-01T10:00:00Z' },
+      ])
+    );
+    // 2. transactions (dívidas)
+    mockFrom.mockImplementationOnce(() =>
+      builderResolvendo([
+        {
+          display_id: 10,
+          description: 'Pizza',
+          third_party_id: 'p1',
+          third_party_share_amount: 50,
+          occurred_at: '2026-10-04T12:00:00Z',
+        },
+      ])
+    );
+    // 3. debt_payments
+    mockFrom.mockImplementationOnce(() =>
+      builderResolvendo([
+        {
+          person_id: 'p1',
+          amount: 20,
+          created_at: '2026-10-04T13:00:00Z',
+        },
+      ])
+    );
+
+    const resultado = await listarPessoasComSaldos(undefined, 'req-1');
+
+    expect(resultado).toHaveLength(1);
+    expect(resultado[0].name).toBe('Maria Silva');
+    expect(resultado[0].saldoDevedor).toBe(30); // 50 - 20
+    expect(resultado[0].totalOriginal).toBe(50);
+    expect(resultado[0].totalPago).toBe(20);
+    expect(resultado[0].status).toBe('Em aberto');
+    expect(resultado[0].itensInclusos).toHaveLength(1);
+  });
+
+  it('deve filtrar saldoDevedorMes e itens quando mesAno for fornecido', async () => {
+    // 1. people
+    mockFrom.mockImplementationOnce(() =>
+      builderResolvendo([
+        { id: 'p1', name: 'João Santos', created_at: '2026-08-01T10:00:00Z' },
+      ])
+    );
+    // 2. transactions (1 em setembro, 1 em outubro)
+    mockFrom.mockImplementationOnce(() =>
+      builderResolvendo([
+        {
+          display_id: 21,
+          description: 'Almoço Outubro',
+          third_party_id: 'p1',
+          third_party_share_amount: 40,
+          occurred_at: '2026-10-02T12:00:00Z',
+        },
+        {
+          display_id: 15,
+          description: 'Cinema Setembro',
+          third_party_id: 'p1',
+          third_party_share_amount: 30,
+          occurred_at: '2026-09-15T12:00:00Z',
+        },
+      ])
+    );
+    // 3. debt_payments
+    mockFrom.mockImplementationOnce(() => builderResolvendo([]));
+
+    const resultado = await listarPessoasComSaldos(undefined, 'req-1', '2026-10');
+
+    expect(resultado).toHaveLength(1);
+    expect(resultado[0].saldoDevedorMes).toBe(40);
+    expect(resultado[0].saldoDevedor).toBe(40);
+    expect(resultado[0].itensInclusos).toHaveLength(1);
+    expect(resultado[0].itensInclusos?.[0].description).toBe('Almoço Outubro');
   });
 });

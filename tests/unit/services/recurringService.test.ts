@@ -4,6 +4,7 @@ import {
   materializarRecorrencia,
   executarCicloRecorrencias,
   iniciarCronRecorrencias,
+  cadastrarNovaRecorrencia,
 } from '../../../src/services/recurring/recurringService';
 
 // Mock do cliente Supabase (evita conexão real).
@@ -197,5 +198,78 @@ describe('iniciarCronRecorrencias', () => {
     const callback = mockSchedule.mock.calls[0][1] as () => Promise<void>;
     mockFrom.mockImplementation(() => builderResolvendo(null, { message: 'boom' }));
     await expect(callback()).resolves.toBeUndefined();
+  });
+});
+
+describe('cadastrarNovaRecorrencia', () => {
+  it('deve definir payment_method como pix por padrão para receitas se não especificado', async () => {
+    const fakeRow = {
+      id: 'rec-inc-1',
+      description: 'Salário Principal',
+      total_amount: 2500,
+      day_of_month: 5,
+      entry_type: 'income',
+      payment_method: 'pix',
+      is_active: true,
+    };
+
+    let payloadEnviado: any = null;
+    const mockBuilder = {
+      insert: vi.fn((payload) => {
+        payloadEnviado = payload;
+        return mockBuilder;
+      }),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: fakeRow, error: null }),
+    };
+
+    mockFrom.mockReturnValue(mockBuilder);
+
+    const res = await cadastrarNovaRecorrencia({
+      description: 'Salário Principal',
+      total_amount: 2500,
+      day_of_month: 5,
+      entry_type: 'income',
+    });
+
+    expect(payloadEnviado).toBeDefined();
+    expect(payloadEnviado.payment_method).toBe('pix');
+    expect(payloadEnviado.entry_type).toBe('income');
+    expect(res.id).toBe('rec-inc-1');
+  });
+
+  it('deve aceitar meal_voucher para benefícios', async () => {
+    const fakeRow = {
+      id: 'rec-vr-1',
+      description: 'Vale-Refeição (VR)',
+      total_amount: 800,
+      day_of_month: 1,
+      entry_type: 'income',
+      payment_method: 'meal_voucher',
+      is_active: true,
+    };
+
+    let payloadEnviado: any = null;
+    const mockBuilder = {
+      insert: vi.fn((payload) => {
+        payloadEnviado = payload;
+        return mockBuilder;
+      }),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: fakeRow, error: null }),
+    };
+
+    mockFrom.mockReturnValue(mockBuilder);
+
+    const res = await cadastrarNovaRecorrencia({
+      description: 'Vale-Refeição (VR)',
+      total_amount: 800,
+      day_of_month: 1,
+      entry_type: 'income',
+      payment_method: 'meal_voucher',
+    });
+
+    expect(payloadEnviado.payment_method).toBe('meal_voucher');
+    expect(res.id).toBe('rec-vr-1');
   });
 });

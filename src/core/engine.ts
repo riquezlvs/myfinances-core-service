@@ -719,6 +719,12 @@ export async function gerarPreviewTransacao(
       name: c.name,
       balance: Number(c.balance),
     })),
+    thirdPartyName: transaction.third_party_name ?? (transaction.third_party_names?.[0] || null),
+    thirdPartyNames: transaction.third_party_names ?? (transaction.third_party_name ? [transaction.third_party_name] : undefined),
+    myShareAmount: transaction.my_share_amount ?? null,
+    thirdPartyShareAmount: (transaction.third_party_names?.length || transaction.third_party_name)
+      ? Math.round((valor - (transaction.my_share_amount ?? Math.round((valor / ((transaction.third_party_names?.length || 1) + 1)) * 100) / 100)) * 100) / 100
+      : null,
   };
 
   return {
@@ -749,6 +755,9 @@ export async function confirmarTransacaoUnificado(
     dayOfMonth?: number;
     incomeType?: 'salary' | 'freelance' | 'benefit' | 'other' | null;
     weekendRule?: 'anticipate' | 'postpone' | 'exact';
+    thirdPartyName?: string | null;
+    thirdPartyNames?: string[];
+    myShareAmount?: number | null;
   },
   requestId: string
 ): Promise<EngineOutput> {
@@ -771,6 +780,8 @@ export async function confirmarTransacaoUnificado(
             income_type: (dados.incomeType as any) || 'salary',
             weekend_rule: dados.weekendRule || 'anticipate',
             account_id: dados.accountId || null,
+            category_id: dados.categoryId || 1,
+            payment_method: (dados.paymentMethod as any) || 'pix',
           },
           requestId
         );
@@ -814,6 +825,9 @@ export async function confirmarTransacaoUnificado(
       occurred_at: dados.occurredAt ?? new Date().toISOString(),
       entry_type: 'expense',
       installment_total: dados.installmentTotal || null,
+      third_party_name: dados.thirdPartyName ?? null,
+      third_party_names: dados.thirdPartyNames ?? (dados.thirdPartyName ? [dados.thirdPartyName] : undefined),
+      my_share_amount: dados.myShareAmount ?? null,
     },
     dados.rawInput || dados.description,
     requestId

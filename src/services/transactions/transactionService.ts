@@ -16,9 +16,23 @@ import type { ParsedTransaction, PaymentMethod } from '../../types/transaction';
  * que o total inteiro é responsabilidade do terceiro (ex: "paguei o Uber
  * da Maria, 40 reais" sem menção de divisão).
  */
-function calcularThirdPartyShare(totalAmount: number, myShareAmount: number | null | undefined): number {
-  const minhaParte = myShareAmount ?? 0;
-  return Math.round((totalAmount - minhaParte) * 100) / 100;
+function calcularThirdPartyShare(
+  totalAmount: number,
+  myShareAmount: number | null | undefined,
+  rawInput?: string
+): { minhaParte: number; thirdPartyShare: number } {
+  let minhaParte: number;
+  if (myShareAmount != null) {
+    minhaParte = Math.min(Math.round(myShareAmount * 100) / 100, totalAmount);
+  } else if (rawInput && /divid/i.test(rawInput)) {
+    // Se a mensagem cita divisão (ex: "dividido com João", "almoço dividi com a Maria")
+    minhaParte = Math.round((totalAmount / 2) * 100) / 100;
+  } else {
+    // Se não cita divisão nem my_share_amount (ex: "paguei o uber da Maria"), terceiro deve o total
+    minhaParte = 0;
+  }
+  const thirdPartyShare = Math.round((totalAmount - minhaParte) * 100) / 100;
+  return { minhaParte, thirdPartyShare };
 }
 
 /**
@@ -49,9 +63,9 @@ export async function registrarTransacao(
   if (!ehSplitMultiplo && nomesTerceiros.length === 1) {
     thirdPartyId = await resolveThirdPartyId(nomesTerceiros[0], requestId);
   }
-  const thirdPartyShareTotal = thirdPartyId
-    ? calcularThirdPartyShare(dados.total_amount, dados.my_share_amount)
-    : 0;
+  const { minhaParte: minhaParteCalculada, thirdPartyShare: thirdPartyShareTotal } = thirdPartyId
+    ? calcularThirdPartyShare(dados.total_amount, dados.my_share_amount, rawInput)
+    : { minhaParte: dados.total_amount, thirdPartyShare: 0 };
 
   return withTiming('inserir transação no Supabase', { requestId, parcelado: ehParcelado, split: ehSplitMultiplo }, async () => {
     const supabase = getSupabaseClient();
@@ -137,7 +151,7 @@ export async function registrarTransacao(
           payment_method: dados.payment_method,
           card_id: dados.card_id ?? null,
           occurred_at: dados.occurred_at,
-          my_share_amount: dados.my_share_amount ?? null,
+          my_share_amount: dados.my_share_amount ?? (thirdPartyId ? minhaParteCalculada : null),
           third_party_id: thirdPartyId,
           third_party_share_amount: thirdPartyShareTotal,
           raw_input: rawInput,
