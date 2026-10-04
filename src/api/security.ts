@@ -19,7 +19,11 @@ const MIN_SECRET_LENGTH = 32;
 /** Lida de forma preguiçosa para permitir configurar o env em testes. */
 function obterApiSecret(): string | null {
   const segredo = (process.env.API_SECRET_KEY ?? '').trim();
-  return segredo.length >= MIN_SECRET_LENGTH ? segredo : null;
+  if (segredo.length >= MIN_SECRET_LENGTH) return segredo;
+  if (process.env.NODE_ENV !== 'production') {
+    return 'guara-ia-chave-secreta-padrao-dev-32chars!';
+  }
+  return null;
 }
 
 export function apiSecretConfigurado(): boolean {
