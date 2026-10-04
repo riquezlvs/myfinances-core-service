@@ -41,28 +41,70 @@ import { calcularSafeToSpend, listarContas } from '../services/accounts/accountS
 import { getCategoryMap } from '../services/categories/categoryCache';
 import { listarCartoes } from '../services/cards/cardService';
 import { formatarMetodo } from '../utils/formatters';
+import {
+  aplicarCabecalhosSeguranca,
+  requisicaoAutorizada,
+  apiSecretConfigurado,
+  criarLimitador,
+  obterIpCliente,
+  isUuid,
+  inteiroPositivo,
+  exigirUuid,
+  ErroValidacao,
+  mensagemErroSegura,
+} from './security';
+import { consumirTokenLogin } from './loginTokens';
 
-/**
- * Utilitário para adicionar cabeçalhos CORS a todas as respostas HTTP
- */
+/** Corpo máximo para rotas comuns (JSON simples). Imagens têm limite próprio. */
+const MAX_JSON_BODY_BYTES = 1024 * 1024;
+
+/** Rate limits (processo único, em memória). */
+const limitadorGeral = criarLimitador(180, 60_000);
+const limitadorIA = criarLimitador(20, 60_000);
+const limitadorAuth = criarLimitador(10, 15 * 60_000);
+const limitadorNaoAutorizado = criarLimitador(30, 15 * 60_000);
+
+const ROTAS_IA = new Set([
+  '/api/chat',
+  '/api/chat/preview',
+  '/api/transacoes/interpretar',
+  '/api/chat/image-preview',
+  '/api/transacoes/imagem',
+]);
+
+/** Exposto para testes. */
+export function resetarLimitesApi(): void {
+  limitadorGeral.limpar();
+  limitadorIA.limpar();
+  limitadorAuth.limpar();
+  limitadorNaoAutorizado.limpar();
+}
+
+/** Mantido por compatibilidade: aplica apenas cabeçalhos de segurança (sem CORS wildcard). */
 function setCorsHeaders(res: ServerResponse) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  aplicarCabecalhosSeguranca(undefined, res);
+}
+
+/** Status HTTP adequado: erros de validação viram 400. */
+function statusDoErro(err: unknown, padrao: number): number {
+  return err instanceof ErroValidacao ? 400 : padrao;
 }
 
 /**
- * Lê e parseia o corpo JSON de uma requisição HTTP (suporta até MAX_IMAGE_FILE_SIZE_BYTES para imagens)
+ * Lê e parseia o corpo JSON de uma requisição HTTP com limite de tamanho.
  */
-async function parseJsonBody(req: IncomingMessage): Promise<any> {
+async function parseJsonBody(req: IncomingMessage, maxBytes: number = MAX_JSON_BODY_BYTES): Promise<any> {
   return new Promise((resolve, reject) => {
     let body = '';
+    let abortado = false;
     req.on('data', (chunk) => {
+      if (abortado) return;
       body += chunk;
-      // Prevenção contra payloads gigantes (> 15MB)
-      if (body.length > MAX_IMAGE_FILE_SIZE_BYTES) {
-        req.socket.destroy();
-        reject(new Error('Payload muito grande'));
+      // Prevenção contra payloads gigantes
+      if (body.length > maxBytes) {
+        abortado = true;
+        req.socket?.destroy();
+        reject(new ErroValidacao('Payload muito grande'));
       }
     });
     req.on('end', () => {
@@ -70,7 +112,7 @@ async function parseJsonBody(req: IncomingMessage): Promise<any> {
       try {
         resolve(JSON.parse(body));
       } catch (err) {
-        reject(new Error('JSON inválido'));
+        reject(new ErroValidacao('JSON inválido'));
       }
     });
     req.on('error', reject);
@@ -96,12 +138,73 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   const url = parsedUrl.pathname.replace(/\/+$/, '') || '/';
   const requestId = randomUUID();
 
+  // Cabeçalhos de segurança + CORS somente para origens da whitelist.
+  aplicarCabecalhosSeguranca(req, res);
+
   // Tratamento de CORS Preflight
   if (method === 'OPTIONS') {
-    setCorsHeaders(res);
     res.writeHead(204);
     res.end();
     return true;
+  }
+
+  // Rota pública: GET /health (sem dados sensíveis)
+  if (url === '/health' && method === 'GET') {
+    sendJson(res, 200, { status: 'online', service: 'guara-core-service', timestamp: new Date().toISOString() });
+    return true;
+  }
+
+  // Tudo fora de /api não é gerenciado aqui.
+  if (url !== '/api' && !url.startsWith('/api/')) {
+    return false;
+  }
+
+  // ── Gate de autenticação: TODA rota /api exige a chave secreta ──────────
+  const ip = obterIpCliente(req);
+  if (!apiSecretConfigurado()) {
+    log('error', '🔒 API_SECRET_KEY ausente ou curta (< 32 chars). API bloqueada por segurança.', { requestId });
+    sendJson(res, 503, { sucesso: false, mensagem: 'API indisponível: configuração de segurança ausente.' });
+    return true;
+  }
+  if (!requisicaoAutorizada(req)) {
+    // Respostas lentas/limitadas para quem tenta adivinhar a chave.
+    if (!limitadorNaoAutorizado.permitir(ip)) {
+      sendJson(res, 429, { sucesso: false, mensagem: 'Muitas tentativas. Tente novamente mais tarde.' });
+      return true;
+    }
+    log('warn', '🚫 Requisição à API sem credencial válida', { requestId, ip, method, url });
+    sendJson(res, 401, { sucesso: false, mensagem: 'Não autorizado.' });
+    return true;
+  }
+
+  // ── Rate limiting ───────────────────────────────────────────────────────
+  if (!limitadorGeral.permitir(ip) || (ROTAS_IA.has(url) && !limitadorIA.permitir(ip))) {
+    log('warn', '🚦 Rate limit da API excedido', { requestId, ip, url });
+    sendJson(res, 429, { sucesso: false, mensagem: 'Muitas requisições. Aguarde alguns segundos.' });
+    return true;
+  }
+
+  // Rota: POST /api/auth/telegram-verify (troca link mágico do Telegram por sessão no guara-web)
+  if (url === '/api/auth/telegram-verify' && method === 'POST') {
+    try {
+      if (!limitadorAuth.permitir(`auth:${ip}`)) {
+        sendJson(res, 429, { sucesso: false, mensagem: 'Muitas tentativas. Tente novamente mais tarde.' });
+        return true;
+      }
+      const body = await parseJsonBody(req, 4096);
+      const valido = consumirTokenLogin(body?.token);
+      if (!valido) {
+        log('warn', '🔑 Link de login inválido, expirado ou já utilizado', { requestId, ip });
+        sendJson(res, 401, { sucesso: false, mensagem: 'Link inválido, expirado ou já utilizado.' });
+        return true;
+      }
+      log('info', '🔑 Login web via Telegram autorizado', { requestId, ip });
+      sendJson(res, 200, { sucesso: true });
+      return true;
+    } catch (err: any) {
+      sendJson(res, statusDoErro(err, 500), { sucesso: false, mensagem: 'Erro ao validar link.' });
+      return true;
+    }
   }
 
   // Rota: POST /api/chat/preview ou /api/transacoes/interpretar (Preview sem salvar no banco)
@@ -132,9 +235,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao gerar preview de transação', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao interpretar mensagem.',
+        mensagem: mensagemErroSegura(err, 'Erro ao interpretar mensagem.'),
       });
       return true;
     }
@@ -149,9 +252,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao confirmar transação', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao confirmar transação.',
+        mensagem: mensagemErroSegura(err, 'Erro ao confirmar transação.'),
       });
       return true;
     }
@@ -160,10 +263,16 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   // Rota: POST /api/chat/image-preview (Preview multimodal de imagem / extrato / comprovante)
   if ((url === '/api/chat/image-preview' || url === '/api/transacoes/imagem') && method === 'POST') {
     try {
-      const body = await parseJsonBody(req);
+      const body = await parseJsonBody(req, Math.ceil(MAX_IMAGE_FILE_SIZE_BYTES * 1.4));
       let imageBase64: string = body?.imageBase64 || body?.image || body?.base64;
-      const mimeType: string = body?.mimeType || 'image/jpeg';
-      const legenda: string | undefined = body?.caption || body?.legenda || undefined;
+      const mimeBruto = typeof body?.mimeType === 'string' ? body.mimeType.toLowerCase() : 'image/jpeg';
+      const MIMES_PERMITIDOS = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'];
+      if (!MIMES_PERMITIDOS.includes(mimeBruto)) {
+        throw new ErroValidacao('Tipo de arquivo não suportado.');
+      }
+      const mimeType: string = mimeBruto;
+      const legendaBruta = body?.caption || body?.legenda;
+      const legenda: string | undefined = typeof legendaBruta === 'string' ? legendaBruta.slice(0, 500) : undefined;
 
       if (!imageBase64 || typeof imageBase64 !== 'string') {
         sendJson(res, 400, {
@@ -282,9 +391,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao interpretar imagem de extrato/comprovante', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao processar imagem.',
+        mensagem: mensagemErroSegura(err, 'Erro ao processar imagem.'),
       });
       return true;
     }
@@ -329,9 +438,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao processar /api/chat', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro interno ao processar mensagem.',
+        mensagem: mensagemErroSegura(err, 'Erro interno ao processar mensagem.'),
       });
       return true;
     }
@@ -368,7 +477,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao obter dados de /api/dashboard', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
         mensagem: 'Erro ao carregar métricas do dashboard.',
       });
@@ -390,6 +499,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       }
 
       if (idParam) {
+        idParam = idParam.trim();
+        if (inteiroPositivo(idParam) === null && !isUuid(idParam)) {
+          throw new ErroValidacao('Identificador de lançamento inválido.');
+        }
         const supabase = getSupabaseClient();
         const numericId = parseInt(idParam, 10);
         let txData: any = null;
@@ -553,7 +666,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao obter dados de /api/extrato', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
         mensagem: 'Erro ao carregar dados do extrato.',
       });
@@ -578,9 +691,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao listar categorias', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao carregar categorias.',
+        mensagem: mensagemErroSegura(err, 'Erro ao carregar categorias.'),
       });
       return true;
     }
@@ -604,9 +717,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao listar contas', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao carregar contas.',
+        mensagem: mensagemErroSegura(err, 'Erro ao carregar contas.'),
       });
       return true;
     }
@@ -623,7 +736,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao obter sumário consolidado de contas', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
         mensagem: 'Erro ao obter sumário consolidado de contas.',
       });
@@ -664,9 +777,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao cadastrar receita avulsa', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao registrar receita.',
+        mensagem: mensagemErroSegura(err, 'Erro ao registrar receita.'),
       });
       return true;
     }
@@ -684,7 +797,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao listar recorrências', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
         mensagem: 'Erro ao listar recorrências.',
       });
@@ -724,9 +837,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao cadastrar recorrência', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao cadastrar recorrência.',
+        mensagem: mensagemErroSegura(err, 'Erro ao cadastrar recorrência.'),
       });
       return true;
     }
@@ -755,7 +868,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         return true;
       }
 
-      await desativarRecorrenciaPorId(id, requestId);
+      await desativarRecorrenciaPorId(exigirUuid(id, 'id'), requestId);
       sendJson(res, 200, {
         sucesso: true,
         mensagem: 'Recorrência desativada com sucesso.',
@@ -763,9 +876,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao remover recorrência', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao desativar recorrência.',
+        mensagem: mensagemErroSegura(err, 'Erro ao desativar recorrência.'),
       });
       return true;
     }
@@ -784,8 +897,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         displayId = body?.display_id || body?.id;
       }
 
-      const numId = parseInt(String(displayId), 10);
-      if (isNaN(numId)) {
+      const numId = inteiroPositivo(displayId);
+      if (numId === null) {
         sendJson(res, 400, {
           sucesso: false,
           mensagem: 'O campo "display_id" ou "id" numérico é obrigatório.',
@@ -802,9 +915,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao excluir transação', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao excluir transação no banco de dados.',
+        mensagem: mensagemErroSegura(err, 'Erro ao excluir transação no banco de dados.'),
       });
       return true;
     }
@@ -819,8 +932,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       const body = await parseJsonBody(req);
       const displayId = body?.display_id || body?.id || parsedUrl.searchParams.get('display_id') || parsedUrl.searchParams.get('id');
 
-      const numId = parseInt(String(displayId), 10);
-      if (isNaN(numId)) {
+      const numId = inteiroPositivo(displayId);
+      if (numId === null) {
         sendJson(res, 400, {
           sucesso: false,
           mensagem: 'O campo "display_id" numérico é obrigatório para atualização.',
@@ -833,10 +946,27 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 
       if (body.description !== undefined) updatePayload.description = String(body.description).trim();
       if (body.total_amount !== undefined) updatePayload.total_amount = Number(body.total_amount);
-      if (body.occurred_at !== undefined) updatePayload.occurred_at = body.occurred_at;
-      if (body.payment_method !== undefined) updatePayload.payment_method = body.payment_method;
-      if (body.entry_type !== undefined) updatePayload.entry_type = body.entry_type;
-      if (body.observation !== undefined) updatePayload.observation = body.observation;
+      if (body.occurred_at !== undefined) {
+        if (typeof body.occurred_at !== 'string' || Number.isNaN(Date.parse(body.occurred_at))) {
+          throw new ErroValidacao('Data do lançamento inválida.');
+        }
+        updatePayload.occurred_at = body.occurred_at;
+      }
+      if (body.payment_method !== undefined) {
+        if (typeof body.payment_method !== 'string' || !/^[a-z_]{2,30}$/.test(body.payment_method)) {
+          throw new ErroValidacao('Método de pagamento inválido.');
+        }
+        updatePayload.payment_method = body.payment_method;
+      }
+      if (body.entry_type !== undefined) {
+        if (!['expense', 'income', 'yield', 'transfer'].includes(body.entry_type)) {
+          throw new ErroValidacao('Tipo de lançamento inválido.');
+        }
+        updatePayload.entry_type = body.entry_type;
+      }
+      if (body.observation !== undefined) {
+        updatePayload.observation = body.observation === null ? null : String(body.observation).slice(0, 1000);
+      }
       if (body.category_id !== undefined) updatePayload.category_id = Number(body.category_id);
       if (body.installment_total !== undefined) {
         updatePayload.installment_total = body.installment_total ? Number(body.installment_total) : null;
@@ -845,7 +975,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         updatePayload.installment_number = body.installment_number ? Number(body.installment_number) : null;
       }
       if (body.tags !== undefined) {
-        updatePayload.tags = Array.isArray(body.tags) ? body.tags : null;
+        updatePayload.tags = Array.isArray(body.tags)
+          ? body.tags.filter((t: unknown) => typeof t === 'string').map((t: string) => t.trim().slice(0, 40)).filter(Boolean).slice(0, 20)
+          : null;
       }
 
       let { data, error } = await supabase
@@ -903,9 +1035,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao atualizar transação', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao atualizar transação no banco de dados.',
+        mensagem: mensagemErroSegura(err, 'Erro ao atualizar transação no banco de dados.'),
       });
       return true;
     }
@@ -962,9 +1094,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao processar divisão com amigos', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao salvar divisão com amigos.',
+        mensagem: mensagemErroSegura(err, 'Erro ao salvar divisão com amigos.'),
       });
       return true;
     }
@@ -981,9 +1113,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao obter lista de cartões', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao carregar cartões.',
+        mensagem: mensagemErroSegura(err, 'Erro ao carregar cartões.'),
       });
       return true;
     }
@@ -1025,9 +1157,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao cadastrar cartão', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao cadastrar cartão.',
+        mensagem: mensagemErroSegura(err, 'Erro ao cadastrar cartão.'),
       });
       return true;
     }
@@ -1062,9 +1194,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao remover cartão', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao remover cartão.',
+        mensagem: mensagemErroSegura(err, 'Erro ao remover cartão.'),
       });
       return true;
     }
@@ -1108,7 +1240,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       log('error', 'Erro ao processar pagamento de fatura', { requestId, erro: err.message });
       sendJson(res, 400, {
         sucesso: false,
-        mensagem: err.message || 'Erro ao processar pagamento de fatura.',
+        mensagem: mensagemErroSegura(err, 'Erro ao processar pagamento de fatura.'),
       });
       return true;
     }
@@ -1146,7 +1278,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       log('error', 'Erro ao estornar pagamento de fatura', { requestId, erro: err.message });
       sendJson(res, 400, {
         sucesso: false,
-        mensagem: err.message || 'Erro ao estornar pagamento de fatura.',
+        mensagem: mensagemErroSegura(err, 'Erro ao estornar pagamento de fatura.'),
       });
       return true;
     }
@@ -1163,9 +1295,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao obter dados de investimentos', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao carregar dados de investimentos.',
+        mensagem: mensagemErroSegura(err, 'Erro ao carregar dados de investimentos.'),
       });
       return true;
     }
@@ -1188,9 +1320,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao cadastrar ativo de investimento', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao cadastrar ativo de investimento.',
+        mensagem: mensagemErroSegura(err, 'Erro ao cadastrar ativo de investimento.'),
       });
       return true;
     }
@@ -1213,9 +1345,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao ajustar saldo de instituição', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao ajustar saldo.',
+        mensagem: mensagemErroSegura(err, 'Erro ao ajustar saldo.'),
       });
       return true;
     }
@@ -1233,14 +1365,14 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         return true;
       }
 
-      const resultado = await editarInstituicaoCompleta(body, requestId);
+      const resultado = await editarInstituicaoCompleta({ ...body, accountId: exigirUuid(body.accountId, 'accountId') }, requestId);
       sendJson(res, 200, resultado);
       return true;
     } catch (err: any) {
       log('error', 'Erro ao editar instituição', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao editar instituição.',
+        mensagem: mensagemErroSegura(err, 'Erro ao editar instituição.'),
       });
       return true;
     }
@@ -1258,14 +1390,15 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         return true;
       }
 
-      const resultado = await removerInstituicao(body.accountId, requestId);
+      const validAccountId = exigirUuid(body.accountId, 'accountId');
+      const resultado = await removerInstituicao(validAccountId, requestId);
       sendJson(res, 200, resultado);
       return true;
     } catch (err: any) {
       log('error', 'Erro ao remover instituição', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao remover instituição.',
+        mensagem: mensagemErroSegura(err, 'Erro ao remover instituição.'),
       });
       return true;
     }
@@ -1283,14 +1416,15 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         return true;
       }
 
-      const resultado = await removerAtivo(body.assetId, requestId);
+      const validAssetId = exigirUuid(body.assetId, 'assetId');
+      const resultado = await removerAtivo(validAssetId, requestId);
       sendJson(res, 200, resultado);
       return true;
     } catch (err: any) {
       log('error', 'Erro ao remover ativo', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao remover ativo.',
+        mensagem: mensagemErroSegura(err, 'Erro ao remover ativo.'),
       });
       return true;
     }
@@ -1311,9 +1445,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao obter extrato de investimentos', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao carregar extrato de investimentos.',
+        mensagem: mensagemErroSegura(err, 'Erro ao carregar extrato de investimentos.'),
       });
       return true;
     }
@@ -1333,9 +1467,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao listar pessoas', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao listar pessoas do banco de dados.',
+        mensagem: mensagemErroSegura(err, 'Erro ao listar pessoas do banco de dados.'),
       });
       return true;
     }
@@ -1353,7 +1487,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         return true;
       }
 
-      const pessoa = await cadastrarNovaPessoa(body.name, requestId);
+      const nomeLimpo = body.name.trim().slice(0, 60);
+      const pessoa = await cadastrarNovaPessoa(nomeLimpo, requestId);
       sendJson(res, 201, {
         sucesso: true,
         dados: pessoa,
@@ -1362,9 +1497,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao cadastrar pessoa', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao cadastrar pessoa no banco.',
+        mensagem: mensagemErroSegura(err, 'Erro ao cadastrar pessoa no banco.'),
       });
       return true;
     }
@@ -1387,7 +1522,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       const valorNumerico = Number(valor);
 
       if (personId) {
-        await registrarPagamentoNoBanco(personId, valorNumerico, requestId);
+        const validPersonId = exigirUuid(personId, 'personId');
+        await registrarPagamentoNoBanco(validPersonId, valorNumerico, requestId);
         sendJson(res, 200, {
           sucesso: true,
           mensagem: `Pagamento de R$ ${valorNumerico.toFixed(2)} registrado com sucesso!`,
@@ -1396,7 +1532,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       }
 
       if (nome) {
-        const resultado = await processarPagamento(nome, valorNumerico, requestId);
+        const nomeLimpo = String(nome).trim().slice(0, 60);
+        const resultado = await processarPagamento(nomeLimpo, valorNumerico, requestId);
         sendJson(res, 200, {
           sucesso: true,
           dados: resultado,
@@ -1412,9 +1549,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao registrar pagamento de dívida', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao registrar pagamento.',
+        mensagem: mensagemErroSegura(err, 'Erro ao registrar pagamento.'),
       });
       return true;
     }
@@ -1453,18 +1590,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     } catch (err: any) {
       log('error', 'Erro ao obter resumo de dívidas', { requestId, erro: err.message });
-      sendJson(res, 500, {
+      sendJson(res, statusDoErro(err, 500), {
         sucesso: false,
-        mensagem: err.message || 'Erro ao obter resumo de cobranças.',
+        mensagem: mensagemErroSegura(err, 'Erro ao obter resumo de cobranças.'),
       });
       return true;
     }
-  }
-
-  // Rota: GET /health
-  if (url === '/health' && method === 'GET') {
-    sendJson(res, 200, { status: 'online', service: 'guara-core-service', timestamp: new Date().toISOString() });
-    return true;
   }
 
   // Não é uma rota gerenciada pela API

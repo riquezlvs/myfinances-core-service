@@ -20,7 +20,9 @@ function mockReq(url: string, method = 'GET', bodyObj?: any): IncomingMessage {
   });
   (stream as any).url = url;
   (stream as any).method = method;
-  (stream as any).headers = {};
+  (stream as any).headers = {
+    authorization: `Bearer ${process.env.API_SECRET_KEY}`,
+  };
   return stream as unknown as IncomingMessage;
 }
 

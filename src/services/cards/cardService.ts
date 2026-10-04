@@ -281,6 +281,11 @@ export async function getFaturaDoPeriodo(
         .lt('occurred_at', periodo.fim.toISOString())
         .order('occurred_at', { ascending: true });
 
+      const ID_SEGURO_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^[a-zA-Z0-9_-]{1,64}$/i;
+      if (!ID_SEGURO_REGEX.test(cardId)) {
+        throw new Error(`ID do cartão inválido: "${cardId}"`);
+      }
+
       query = incluirSemCartao
         ? query.or(`card_id.eq.${cardId},card_id.is.null`)
         : query.eq('card_id', cardId);
@@ -611,6 +616,11 @@ export async function obterFaturasDetalhadasDoCartao(
     .gte('occurred_at', inicioGeral.toISOString())
     .lt('occurred_at', fimGeral.toISOString())
     .order('occurred_at', { ascending: true });
+
+  const ID_SEGURO_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^[a-zA-Z0-9_-]{1,64}$/i;
+  if (!ID_SEGURO_REGEX.test(card.id)) {
+    throw new Error(`ID do cartão inválido: "${card.id}"`);
+  }
 
   query = isDefault
     ? query.or(`card_id.eq.${card.id},card_id.is.null`)

@@ -112,6 +112,10 @@ export async function simularParcelamento(
       .lt('occurred_at', dataFimGeral);
 
     if (cartao.id !== 'default-simulacao') {
+      const ID_SEGURO_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^[a-zA-Z0-9_-]{1,64}$/i;
+      if (!ID_SEGURO_REGEX.test(cartao.id)) {
+        throw new Error(`ID do cartão inválido: "${cartao.id}"`);
+      }
       const primeiroCreditoId = cartoesCredito[0]?.id;
       const ehPrimeiro = cartao.id === primeiroCreditoId;
       query = ehPrimeiro

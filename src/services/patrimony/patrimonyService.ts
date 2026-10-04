@@ -2,7 +2,7 @@ import { withTiming } from '../../utils/logger';
 import { listarContas } from '../accounts/accountService';
 import { calcularRendimentoCdi, obterTaxaCdiDiaria } from '../investments/yieldService';
 import { obterCarteiraComCotacoes } from '../investments/assetPriceService';
-import { listarCartoes, calcularPeriodoFatura, getFaturaDoPeriodo } from '../cards/cardService';
+import { listarCartoes, calcularPeriodoFatura, getFaturaDoPeriodo, buscarPagamentosFatura, extrairCicloDasNotas } from '../cards/cardService';
 import { formatarReal } from '../../utils/formatters';
 import { gerarBarraTexto } from '../../utils/sparklines';
 import type { PatrimonySummary } from '../../types/investment';
@@ -49,10 +49,19 @@ export async function obterResumoPatrimonio(requestId: string = 'resumo-patrimon
       });
     }
 
-    // 4. Renda Variável
+    // 4. Renda Variável (Exclui ativos espelho de contas fixed_income / caixinhas para não duplicar)
     const { assets, totalInvested, totalMarketValue, totalProfitLoss } = await obterCarteiraComCotacoes(requestId);
+    const contasFixedIds = new Set(contasFixed.map((c) => c.id));
+    const variableAssets = assets.filter((a) => (!a.account_id || !contasFixedIds.has(a.account_id)) && a.asset_type !== 'other');
+    const varMarketValue = variableAssets.length === assets.length
+      ? totalMarketValue
+      : variableAssets.reduce((s, a) => s + Number(a.market_value || 0), 0);
+    const varInvested = variableAssets.length === assets.length
+      ? totalInvested
+      : variableAssets.reduce((s, a) => s + Number(a.total_invested || 0), 0);
+    const varProfitLoss = Math.round((varMarketValue - varInvested) * 100) / 100;
 
-    // 5. Passivos (Faturas Abertas de Cartão)
+    // 5. Passivos (Faturas Abertas de Cartão deduzindo pagamentos efetuados)
     const cartoes = await listarCartoes(requestId);
     const cartoesCredito = cartoes.filter((c) => c.card_type === 'credit');
     const primeiroCreditoId = cartoesCredito[0]?.id;
@@ -64,7 +73,19 @@ export async function obterResumoPatrimonio(requestId: string = 'resumo-patrimon
       const periodo = calcularPeriodoFatura(c.closing_day);
       const incluirSemCartao = c.id === primeiroCreditoId;
       const itens = await getFaturaDoPeriodo(c.id, periodo, incluirSemCartao, requestId);
-      const subtotal = itens.reduce((s, i) => s + Number(i.total_amount), 0);
+      const totalCompras = itens.reduce((s, i) => s + Number(i.total_amount), 0);
+
+      const pagamentos = await buscarPagamentosFatura(c.id, periodo.inicio, periodo.fim, requestId).catch(() => []);
+      const cicloId = `${periodo.inicio.getFullYear()}-${String(periodo.inicio.getMonth() + 1).padStart(2, '0')}`;
+      const pagamentosDoCiclo = pagamentos.filter((p) => {
+        const cicloDef = p.billing_cycle || extrairCicloDasNotas(p.notes);
+        if (cicloDef) return cicloDef === cicloId;
+        const pMs = new Date(p.paid_at).getTime();
+        return pMs >= periodo.inicio.getTime() && pMs < periodo.fim.getTime();
+      });
+      const totalPago = pagamentosDoCiclo.reduce((s, p) => s + Number(p.amount || 0), 0);
+      const subtotal = Math.max(0, Math.round((totalCompras - totalPago) * 100) / 100);
+
       totalFaturas += subtotal;
       faturasDetalhes.push({ name: c.name, amount: subtotal });
     }
@@ -73,7 +94,7 @@ export async function obterResumoPatrimonio(requestId: string = 'resumo-patrimon
 
     // Total Patrimônio Líquido:
     // (Líquido + VR + Caixinhas Líquidas + Renda Variável a Mercado) - Faturas Abertas
-    const totalAtivos = totalLiquid + totalBenefit + totalFixedNet + totalMarketValue;
+    const totalAtivos = totalLiquid + totalBenefit + totalFixedNet + varMarketValue;
     const totalNetWorth = Math.round((totalAtivos - totalFaturas) * 100) / 100;
 
     return {
@@ -92,10 +113,10 @@ export async function obterResumoPatrimonio(requestId: string = 'resumo-patrimon
         accounts: fixedDetails,
       },
       variableIncome: {
-        totalMarketValue,
-        totalInvested,
-        totalProfitLoss,
-        assets,
+        totalMarketValue: varMarketValue,
+        totalInvested: varInvested,
+        totalProfitLoss: varProfitLoss,
+        assets: variableAssets,
       },
       openCreditInvoices: {
         total: totalFaturas,

@@ -37,6 +37,7 @@ import { handleSaldo } from '../commands/saldo';
 import { handleAjustarSaldo } from '../commands/ajustarSaldo';
 import { handleInvestimentos } from '../commands/investimentos';
 import { handleSimular } from '../commands/simular';
+import { handleLoginWeb } from '../commands/loginWeb';
 import { getCategoryMap } from '../../services/categories/categoryCache';
 import { enqueue } from '../../utils/concurrency';
 import { verificarRateLimit, tokensRestantes } from '../../utils/rateLimit';
@@ -871,6 +872,11 @@ async function rotearComando(
     log('info', 'Comando: /simular', { requestId });
     const argumentos = texto.replace(/^\/simular/i, '').trim();
     await handleSimular(chatId, argumentos, requestId, bot);
+    return true;
+  }
+  if (texto.startsWith('/login_web') || texto.startsWith('/login')) {
+    log('info', 'Comando: /login_web', { requestId });
+    await handleLoginWeb(chatId, requestId, bot);
     return true;
   }
   if (texto.startsWith('/')) {

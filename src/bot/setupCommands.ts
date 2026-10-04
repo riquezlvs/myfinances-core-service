@@ -28,6 +28,7 @@ export async function setupCommands(): Promise<void> {
     { command: 'cartao', description: 'Cartões e faturas por fechamento' },
     { command: 'poupanca', description: 'Metas de poupança de longo prazo' },
     { command: 'viagem', description: 'Modo viagem (gastos em USD/EUR)' },
+    { command: 'login_web', description: 'Entrar no Guará Web no celular' },
     { command: 'status', description: 'Status do serviço (uptime, latência, versão)' },
   ]);
 

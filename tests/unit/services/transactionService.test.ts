@@ -9,6 +9,15 @@ vi.mock('../../../src/services/people/peopleService', () => ({
   resolveThirdPartyId: vi.fn(),
 }));
 
+vi.mock('../../../src/services/accounts/accountService', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/services/accounts/accountService')>();
+  return {
+    ...actual,
+    debitarSaldo: vi.fn(),
+    creditarSaldo: vi.fn(),
+  };
+});
+
 import {
   registrarTransacao,
   getGastosDiariosDoMes,
@@ -17,6 +26,7 @@ import {
   anteciparParcelas,
 } from '../../../src/services/transactions/transactionService';
 import { resolveThirdPartyId } from '../../../src/services/people/peopleService';
+import { debitarSaldo, creditarSaldo } from '../../../src/services/accounts/accountService';
 import type { ParsedTransaction } from '../../../src/types/transaction';
 
 const mockResolveThirdPartyId = vi.mocked(resolveThirdPartyId);
@@ -56,6 +66,8 @@ function baseDados(overrides: Partial<ParsedTransaction> = {}): ParsedTransactio
 beforeEach(() => {
   mockFrom.mockReset();
   mockResolveThirdPartyId.mockReset();
+  vi.mocked(debitarSaldo).mockReset();
+  vi.mocked(creditarSaldo).mockReset();
 });
 
 afterEach(() => {
@@ -128,6 +140,22 @@ describe('registrarTransacao — third_party_share_amount (Fase 7.2)', () => {
     for (const linha of linhasInseridas) {
       expect(linha.third_party_share_amount).toBeCloseTo(50, 2); // 100 (parcela) * 50%
     }
+  });
+
+  it('deve debitar o saldo da conta quando account_id é fornecido', async () => {
+    const insertBuilder = builderResolvendo(null, null, { display_id: 20 });
+    mockFrom.mockImplementationOnce(() => insertBuilder);
+
+    await registrarTransacao(
+      baseDados({
+        total_amount: 150,
+        account_id: 'acc-caixinha-1',
+      }),
+      'raw',
+      'req-deb-acc'
+    );
+
+    expect(debitarSaldo).toHaveBeenCalledWith('acc-caixinha-1', 150, 'req-deb-acc');
   });
 });
 
@@ -267,6 +295,21 @@ describe('apagarParcelasPorEscopo', () => {
     const res = await apagarParcelasPorEscopo(9, 'todas', 'req-del-3');
     expect(res.displayIds).toEqual([9, 10, 11]);
     expect(builderDelete.eq).toHaveBeenCalledWith('installment_group_id', 'grp-1');
+  });
+
+  it('deve restaurar o saldo da conta quando a transação excluída possuir account_id', async () => {
+    const builderSelect = builderResolvendo(null, null, null);
+    builderSelect.maybeSingle = vi.fn().mockResolvedValue({
+      data: { display_id: 30, installment_group_id: null, installment_number: null, account_id: 'acc-caixinha-1', total_amount: 80 },
+      error: null,
+    });
+    const builderDelete = builderResolvendo(null);
+
+    mockFrom.mockImplementationOnce(() => builderSelect).mockImplementationOnce(() => builderDelete);
+
+    const res = await apagarParcelasPorEscopo(30, 'apenas_esta', 'req-del-restore');
+    expect(res.displayIds).toEqual([30]);
+    expect(creditarSaldo).toHaveBeenCalledWith('acc-caixinha-1', 80, 'req-del-restore');
   });
 });
 

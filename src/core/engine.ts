@@ -822,6 +822,7 @@ export async function confirmarTransacaoUnificado(
       payment_method: (dados.paymentMethod as any) || 'debit_card',
       card_id: dados.cardId || null,
       account_name: dados.accountName ?? null,
+      account_id: dados.accountId || null,
       occurred_at: dados.occurredAt ?? new Date().toISOString(),
       entry_type: 'expense',
       installment_total: dados.installmentTotal || null,

@@ -112,6 +112,9 @@ export async function ajustarSaldo(
       .single();
 
     if (error) throw new Error(`Erro ao ajustar saldo: ${error.message}`);
+    if (conta.type === 'fixed_income') {
+      await sincronizarAtivoComConta(conta.id, novoSaldo, requestId);
+    }
     log('info', 'Saldo de conta ajustado com sucesso', {
       requestId,
       conta: conta.name,
@@ -120,6 +123,51 @@ export async function ajustarSaldo(
     });
     return data as unknown as Account;
   });
+}
+
+/**
+ * Sincroniza eventuais registros espelho de ativos em investment_assets
+ * quando o saldo de uma conta de renda fixa/caixinha é alterado.
+ */
+export async function sincronizarAtivoComConta(
+  accountId: string,
+  novoSaldo: number,
+  requestId: string
+): Promise<void> {
+  try {
+    const supabase = getSupabaseClient();
+    const { data: ativos, error } = await supabase
+      .from('investment_assets')
+      .select('id, ticker, asset_type, quantity, average_price')
+      .eq('account_id', accountId);
+
+    if (error || !ativos || ativos.length === 0) return;
+
+    for (const a of ativos) {
+      if (a.asset_type === 'other' || Number(a.quantity) === 1) {
+        if (novoSaldo > 0) {
+          await supabase
+            .from('investment_assets')
+            .update({
+              average_price: novoSaldo,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', a.id);
+        } else {
+          await supabase
+            .from('investment_assets')
+            .delete()
+            .eq('id', a.id);
+        }
+      }
+    }
+  } catch (err: any) {
+    log('warn', 'Aviso ao sincronizar investment_assets com saldo da conta', {
+      requestId,
+      accountId,
+      erro: err.message,
+    });
+  }
 }
 
 /**
@@ -136,6 +184,9 @@ export async function creditarSaldo(accountId: string, valor: number, requestId:
     .eq('id', accountId);
 
   if (error) throw new Error(`Erro ao creditar saldo: ${error.message}`);
+  if (conta.type === 'fixed_income') {
+    await sincronizarAtivoComConta(accountId, novoSaldo, requestId);
+  }
   return novoSaldo;
 }
 
@@ -153,6 +204,9 @@ export async function debitarSaldo(accountId: string, valor: number, requestId: 
     .eq('id', accountId);
 
   if (error) throw new Error(`Erro ao debitar saldo: ${error.message}`);
+  if (conta.type === 'fixed_income') {
+    await sincronizarAtivoComConta(accountId, novoSaldo, requestId);
+  }
   return novoSaldo;
 }
 

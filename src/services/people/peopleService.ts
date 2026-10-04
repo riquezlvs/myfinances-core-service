@@ -113,7 +113,8 @@ export async function listarPessoasComSaldos(
     // 1. Busca todas as pessoas cadastradas
     let query = supabase.from('people').select('id, name, created_at').order('name', { ascending: true });
     if (busca && busca.trim()) {
-      query = query.ilike('name', `%${busca.trim()}%`);
+      const buscaEscapada = busca.trim().slice(0, 60).replace(/[\\%_]/g, (c) => `\\${c}`);
+      query = query.ilike('name', `%${buscaEscapada}%`);
     }
     const { data: pessoas, error: erroPessoas } = await query;
     if (erroPessoas) throw new Error(`Erro ao buscar pessoas: ${erroPessoas.message}`);

@@ -92,6 +92,7 @@ export function buildPayloadPrompt(
     'Regras:',
     '  - NOVO_GASTO: o usuário relata uma despesa nova. Preencha "transaction" com os campos obrigatórios e entry_type = "expense". ' +
       'Se o usuário NÃO citar a forma de pagamento, retorne payment_method = null (o sistema infere vale/crédito pela categoria). NUNCA invente um método. ' +
+      'Se o usuário citar que pagou com uma conta, caixinha ou reserva específica (ex: "paguei com a caixinha do Nubank", "debitado da caixinha", "paguei no débito inter"), preencha account_name (ex: "Caixinha Nubank" ou o banco citado) e payment_method = "debit_card". ' +
       '8.7 — Se a despesa é dividida ENTRE VÁRIAS pessoas (ex: "dividido em 3 com Maria e João"), preencha third_party_names ' +
       'com todos os nomes citados e NÃO preencha my_share_amount (o sistema calcula as partes em partes iguais); ' +
       'se citar explicitamente sua parte (ex: "minha parte é 40"), preencha my_share_amount. Se for apenas UMA pessoa, use third_party_name.',

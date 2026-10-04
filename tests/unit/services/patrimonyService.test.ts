@@ -17,6 +17,8 @@ vi.mock('../../../src/services/cards/cardService', () => ({
   listarCartoes: vi.fn(),
   calcularPeriodoFatura: vi.fn(),
   getFaturaDoPeriodo: vi.fn(),
+  buscarPagamentosFatura: vi.fn().mockResolvedValue([]),
+  extrairCicloDasNotas: vi.fn().mockReturnValue(null),
 }));
 
 import { obterResumoPatrimonio, formatarMensagemPatrimonio } from '../../../src/services/patrimony/patrimonyService';

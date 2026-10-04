@@ -4,6 +4,7 @@ import { iniciarBot } from './bot';
 import { log } from './utils/logger';
 
 import { handleApiRequest } from './api/routes';
+import { aplicarCabecalhosSeguranca } from './api/security';
 
 async function main(): Promise<void> {
   const porta = Number(process.env.PORT || 3001);
@@ -20,10 +21,8 @@ async function main(): Promise<void> {
     const tratouApi = await handleApiRequest(requisicao, resposta);
     if (tratouApi) return;
 
-    // Garante cabeçalhos CORS mesmo para rotas não mapeadas pela API
-    resposta.setHeader('Access-Control-Allow-Origin', '*');
-    resposta.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE, PUT');
-    resposta.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    // Aplica cabeçalhos de segurança e CORS restrito para rotas não mapeadas
+    aplicarCabecalhosSeguranca(requisicao, resposta);
 
     if (metodo === 'OPTIONS') {
       resposta.writeHead(204);

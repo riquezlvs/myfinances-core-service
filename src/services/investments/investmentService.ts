@@ -564,10 +564,17 @@ export async function obterExtratoInvestimentos(
             tipoItem = 'JCP';
           } else if (isYield || descLower.includes('dividendo') || descLower.includes('rendimento')) {
             tipoItem = 'Dividendo';
-          } else if (descLower.includes('resgate')) {
-            tipoItem = 'Resgate';
           } else if (descLower.includes('compra') || descLower.includes('ação') || descLower.includes('fii')) {
             tipoItem = 'Compra Ações';
+          } else if (descLower.includes('aporte')) {
+            tipoItem = 'Aporte';
+          } else if (
+            descLower.includes('resgate') ||
+            descLower.includes('pagamento de fatura') ||
+            descLower.includes('fatura') ||
+            (isInvestmentAccount && (t.entry_type === 'expense' || t.entry_type === 'transfer'))
+          ) {
+            tipoItem = 'Resgate';
           }
 
           // Categoria amigável

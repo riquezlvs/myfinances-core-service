@@ -6,6 +6,7 @@ import { resolveThirdPartyId } from '../people/peopleService';
 import { calcularParcelas } from './installments';
 import { mesAnoAtual, intervaloDoMes } from '../../utils/month';
 import type { ParsedTransaction, PaymentMethod } from '../../types/transaction';
+import { debitarSaldo, creditarSaldo, obterContaPorNome } from '../accounts/accountService';
 
 /**
  * Fase 7 (7.2) — Calcula quanto fica para o terceiro quando há divisão.
@@ -141,6 +142,16 @@ export async function registrarTransacao(
       return { displayIds: (data ?? []).map((d) => d.display_id as number) };
     }
 
+    let accountId = dados.account_id ?? null;
+    if (!accountId && dados.account_name) {
+      try {
+        const c = await obterContaPorNome(dados.account_name, requestId);
+        if (c) accountId = c.id;
+      } catch {
+        // Ignora erro de busca
+      }
+    }
+
     if (!ehParcelado) {
       const { data, error } = await supabase
         .from('transactions')
@@ -156,12 +167,26 @@ export async function registrarTransacao(
           third_party_share_amount: thirdPartyShareTotal,
           raw_input: rawInput,
           entry_type: dados.entry_type ?? 'expense',
-          account_id: dados.account_id ?? null,
+          account_id: accountId,
         })
         .select('display_id')
         .single();
 
       if (error) throw new Error(`Erro ao inserir no Supabase: ${error.message}`);
+
+      // Débito automático do saldo da conta vinculada (inclusive caixinha/patrimônio)
+      if (accountId && (!dados.entry_type || dados.entry_type === 'expense')) {
+        try {
+          await debitarSaldo(accountId, dados.total_amount, requestId);
+        } catch (errDeb: any) {
+          log('warn', 'Aviso ao debitar saldo da conta ao registrar despesa', {
+            requestId,
+            accountId,
+            erro: errDeb.message,
+          });
+        }
+      }
+
       return { displayIds: [data.display_id as number] };
     }
 
@@ -296,7 +321,7 @@ export async function apagarParcelasPorEscopo(
 
     const { data: linha, error: erroBusca } = await supabase
       .from('transactions')
-      .select('display_id, installment_group_id, installment_number, description, occurred_at, third_party_share_amount')
+      .select('display_id, installment_group_id, installment_number, description, occurred_at, third_party_share_amount, account_id, entry_type, total_amount')
       .eq('display_id', displayId)
       .maybeSingle();
 
@@ -310,6 +335,24 @@ export async function apagarParcelasPorEscopo(
       const { error } = await supabase.from('transactions').delete().eq('display_id', displayId);
       if (error) throw new Error(`Erro ao apagar transação ${displayId}: ${error.message}`);
       const apagados = [displayId];
+
+      // Reverte o saldo na conta vinculada
+      if (linha.account_id && Number(linha.total_amount) > 0) {
+        try {
+          if (linha.entry_type === 'expense' || !linha.entry_type) {
+            await creditarSaldo(linha.account_id, Number(linha.total_amount), requestId);
+          } else if (linha.entry_type === 'income') {
+            await debitarSaldo(linha.account_id, Number(linha.total_amount), requestId);
+          }
+        } catch (errBal: any) {
+          log('warn', 'Aviso ao estornar saldo de conta ao apagar transação', {
+            requestId,
+            displayId,
+            accountId: linha.account_id,
+            erro: errBal.message,
+          });
+        }
+      }
 
       // Fallback: limpa dívidas órfãs de splits legados (sem installment_group_id).
       // Apaga linhas da mesma data cujo description termina em " (parte de <nome>)"

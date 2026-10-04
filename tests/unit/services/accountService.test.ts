@@ -16,6 +16,9 @@ import {
   ajustarSaldo,
   calcularSafeToSpend,
   resolverContaParaTransacao,
+  debitarSaldo,
+  creditarSaldo,
+  sincronizarAtivoComConta,
 } from '../../../src/services/accounts/accountService';
 import { listarCartoes, calcularPeriodoFatura, getFaturaDoPeriodo } from '../../../src/services/cards/cardService';
 
@@ -104,5 +107,45 @@ describe('accountService — Contas, saldos e Safe to Spend', () => {
     const res = await resolverContaParaTransacao('meal_voucher', null, null, 'req-1');
     expect(res?.id).toBe('acc-2');
     expect(res?.name).toBe('VR Refeição');
+  });
+
+  it('deve debitar saldo e sincronizar ativo espelho de renda fixa', async () => {
+    const conta = { id: 'acc-fx-1', name: 'Caixinha Reserva', type: 'fixed_income', balance: 1000 };
+    const builderGetConta = builderResolvendo(conta, null, conta);
+    const builderUpdateConta = builderResolvendo({ ...conta, balance: 800 });
+    const ativos = [{ id: 'asset-1', ticker: 'Caixinha Reserva', asset_type: 'other', quantity: 1, average_price: 1000 }];
+    const builderGetAtivos = builderResolvendo(ativos);
+    const builderUpdateAtivo = builderResolvendo({ ...ativos[0], average_price: 800 });
+
+    mockFrom
+      .mockReturnValueOnce(builderGetConta)     // obterContaPorId
+      .mockReturnValueOnce(builderUpdateConta)  // update accounts
+      .mockReturnValueOnce(builderGetAtivos)    // select investment_assets
+      .mockReturnValueOnce(builderUpdateAtivo);  // update investment_assets
+
+    const novoSaldo = await debitarSaldo('acc-fx-1', 200, 'req-deb');
+    expect(novoSaldo).toBe(800);
+    expect(builderUpdateConta.update).toHaveBeenCalledWith(
+      expect.objectContaining({ balance: 800 })
+    );
+    expect(builderUpdateAtivo.update).toHaveBeenCalledWith(
+      expect.objectContaining({ average_price: 800 })
+    );
+  });
+
+  it('deve creditar saldo da conta', async () => {
+    const conta = { id: 'acc-1', name: 'Conta Corrente', type: 'checking', balance: 500 };
+    const builderGetConta = builderResolvendo(conta, null, conta);
+    const builderUpdateConta = builderResolvendo({ ...conta, balance: 750 });
+
+    mockFrom
+      .mockReturnValueOnce(builderGetConta)
+      .mockReturnValueOnce(builderUpdateConta);
+
+    const novoSaldo = await creditarSaldo('acc-1', 250, 'req-cred');
+    expect(novoSaldo).toBe(750);
+    expect(builderUpdateConta.update).toHaveBeenCalledWith(
+      expect.objectContaining({ balance: 750 })
+    );
   });
 });
