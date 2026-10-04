@@ -47,7 +47,7 @@ import { formatarMetodo } from '../utils/formatters';
  */
 function setCorsHeaders(res: ServerResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
@@ -1040,8 +1040,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     try {
       let cardId = parsedUrl.searchParams.get('id') || parsedUrl.searchParams.get('name');
       
-      if (!cardId && method === 'POST') {
-        const body = await parseJsonBody(req);
+      if (!cardId) {
+        const body = await parseJsonBody(req).catch(() => ({}));
         cardId = body?.id || body?.name;
       }
 

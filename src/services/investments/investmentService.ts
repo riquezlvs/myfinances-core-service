@@ -88,8 +88,8 @@ export async function obterDadosInvestimentosDashboard(requestId: string = 'dash
       return acc + (Number(a.quantity) * Number(preco));
     }, 0);
 
-    // Ativos de renda variável reais (ações, FIIs, etc., vinculados a contas ativas)
-    const variaveisAtivos = ativosValidos.filter((a) => a.asset_type !== 'crypto');
+    // Ativos de renda variável reais (ações, FIIs vinculados a contas ativas)
+    const variaveisAtivos = ativosValidos.filter((a) => a.asset_type === 'stock' || a.asset_type === 'fii');
     const totalMercadoVariaveis = variaveisAtivos.reduce((acc, a) => {
       const preco = a.current_price ?? a.average_price ?? 0;
       return acc + (Number(a.quantity) * Number(preco));
