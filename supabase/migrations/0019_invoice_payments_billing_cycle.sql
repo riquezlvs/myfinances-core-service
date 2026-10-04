@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0017_invoice_payments_billing_cycle.sql
+-- 0019_invoice_payments_billing_cycle.sql
 -- Adiciona ciclo de referência (billing_cycle) para pagamentos de fatura
 -- ============================================================================
 
